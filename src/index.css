@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    @apply antialiased selection:bg-indigo-500/20 selection:text-indigo-600 dark:selection:bg-indigo-500/40 dark:selection:text-indigo-300;
+  }
+  
+  code, pre {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(239, 68, 68, 0.4), 0 0 30px rgba(245, 158, 11, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(239, 68, 68, 0.7), 0 0 45px rgba(245, 158, 11, 0.4);
+  }
+}
+
+.jacqueline-glow {
+  animation: pulseGlow 3s infinite ease-in-out;
+}

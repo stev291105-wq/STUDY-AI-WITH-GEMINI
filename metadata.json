@@ -1,0 +1,6 @@
+{
+  "name": "StudyMaster AI",
+  "description": "Plataforma interactiva de estudio con análisis multimodal de documentos, OCR/HTR y cuestionarios dinámicos con nivel Jacqueline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
