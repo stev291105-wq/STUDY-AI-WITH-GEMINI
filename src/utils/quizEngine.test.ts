@@ -875,4 +875,45 @@ test('Document selection filter: Deselected documents (selected: false) are excl
   }
 });
 
+test('Performance & Non-Freeze Guarantee: Difícil (POVEDA) with 3 modalities and 10 questions on complex text finishes in < 500ms', () => {
+  // Include sentences that previously triggered catastrophic regex backtracking (El ... de ... en ... para ... without matching listed verbs)
+  const complexLines: string[] = [
+    '1. Evaluación Psicodiagnóstica y Entrevista Clínica',
+    'El encuadre de la entrevista en el proceso de orientación vocacional para adolescentes en contextos clínicos y educativos articula variables transferenciales.',
+    'La devolución de información diagnóstica en el proceso psicodiagnóstico clínico para adultos y niños sintetiza los indicadores convergentes.',
+    'Bleger (Argentina): define la entrevista psicológica como un campo dinámico estructurado por las variables de la personalidad del entrevistado (pág. 14).',
+    'Siquier de Ocampo y García Arzeno (Argentina): establecen las fases del proceso psicodiagnóstico desde la primera entrevista hasta el informe final (1987, pág. 32).',
+    'Bohoslavsky (Argentina): propone la modalidad clínica en orientación vocacional centrada en la identidad ocupacional del adolescente.',
+    'Aberastury (Argentina): introduce la hora de juego diagnóstica como instrumento técnico para comprender la realidad psíquica infantil.',
+  ];
+  // Repeat across 40 sections to simulate a large multi-page PDF/document
+  const hugeRawText = Array.from({ length: 40 }, (_, idx) =>
+    `Sección ${idx + 1}: Fundamentos Clínicos\n` + complexLines.join('\n')
+  ).join('\n\n');
 
+  const largeDoc: UploadedDoc = {
+    id: 'doc-large-stress',
+    name: 'Resumen_General_Psicodiagnostico_Completo.pdf',
+    size: hugeRawText.length,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: hugeRawText,
+    selected: true,
+    status: 'ready',
+  };
+  largeDoc.analysis = buildLocalDocAnalysis(largeDoc);
+
+  const startMs = Date.now();
+  const questions = generateFallbackQuestions([largeDoc], {
+    selectedModalities: ['multiple_choice', 'true_false', 'fill_blank'],
+    difficulty: 'dificil',
+    questionCount: 10,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+  const elapsedMs = Date.now() - startMs;
+
+  assert.equal(questions.length, 10);
+  assert.ok(elapsedMs < 500, `Expected generation in < 500ms, took ${elapsedMs}ms`);
+});

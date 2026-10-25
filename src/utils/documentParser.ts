@@ -273,7 +273,20 @@ function reconstructParagraphLines(lines: string[]): string[] {
 export function sanitizeAcademicText(raw: string): string {
   if (!raw) return '';
 
-  let text = raw
+  // Bound ultra-massive inputs (>180k chars) by sampling evenly across beginning, middle, and end so UI never lags
+  let workingRaw = raw;
+  if (workingRaw.length > 180000) {
+    const chunk = 60000;
+    const mid = Math.floor(workingRaw.length / 2) - Math.floor(chunk / 2);
+    workingRaw =
+      workingRaw.slice(0, chunk) +
+      '\n\n' +
+      workingRaw.slice(mid, mid + chunk) +
+      '\n\n' +
+      workingRaw.slice(workingRaw.length - chunk);
+  }
+
+  let text = workingRaw
     .replace(/\u0000/g, ' ')
     .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ')
     .replace(/\uFFFD+/g, ' ')
@@ -281,19 +294,18 @@ export function sanitizeAcademicText(raw: string): string {
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n');
 
-  // 1. Remove corrupted or standard PDF page headers/footers and inline page citations:
-  // e.g., "P ageA 1 AofA C5", "Page 1 of 5", "Página 2 de 10", "(pág. 14)", "pág. 12 y 13", "(pp. 12-15)", "- 3 -"
+  // 1. Remove corrupted or standard PDF page headers/footers and inline page citations using strictly bounded O(N) patterns
   text = text
-    .replace(/\bP\s*age[A-Za-z0-9\s]*?\d+\s*[A-Za-z]*of[A-Za-z0-9\s]*?\b/gi, ' ')
-    .replace(/\bPage\s+\d+\s*(?:of|\/)\s*\d+\b/gi, ' ')
-    .replace(/\bP[áa]gina\s+\d+\s*(?:de|\/)\s*\d+\b/gi, ' ')
-    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d+(?:\s*[-–a,y]\s*\d+)*\s*\)/gi, ' ')
-    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d+(?:\s*(?:[-–a]|y|e)\s*\d+)*\b/gi, ' ')
+    .replace(/\bP\s*ageA?\s*\d{1,4}\s*A?ofA?\s*[A-Za-z0-9]{1,5}\b/gi, ' ')
+    .replace(/\bPage\s+\d{1,4}\s*(?:of|\/)\s*\d{1,4}\b/gi, ' ')
+    .replace(/\bP[áa]gina\s+\d{1,4}\s*(?:de|\/)\s*\d{1,4}\b/gi, ' ')
+    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d{1,4}(?:\s*[-–a,y]\s*\d{1,4}){0,4}\s*\)/gi, ' ')
+    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d{1,4}(?:\s*(?:[-–a]|y|e)\s*\d{1,4}){0,4}\b/gi, ' ')
     // Strip standalone parenthetical citation years like "Sternberg (1998)" -> "Sternberg" or "(1974, p. 12)" -> ""
-    .replace(/\(\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d+(?:\s*[-–]\s*\d+)?)?\s*\)/gi, ' ')
-    // Transform parenthetical author+year citations "(Bleger, 1971)" or "(Ocampo y Arzeno, 1985, p. 14)" into "(según Bleger)"
+    .replace(/\(\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d{1,4}(?:\s*[-–]\s*\d{1,4})?)?\s*\)/gi, ' ')
+    // Transform parenthetical author+year citations "(Bleger, 1971)" into "(según Bleger)" with zero nested quantifiers
     .replace(
-      /\(\s*([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:\s+(?:y|e|de|del|&\s*|\s*,\s*)\s*[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+){0,3})\s*,\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d+(?:\s*[-–]\s*\d+)?)?\s*\)/g,
+      /\(\s*([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s,&]{1,45}?)\s*,\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d{1,4}(?:\s*[-–]\s*\d{1,4})?)?\s*\)/g,
       '(según $1)'
     )
     .replace(/(?:^|\n)\s*[-–—]?\s*\d{1,3}\s*[-–—]?\s*(?=\n|$)/g, '\n');

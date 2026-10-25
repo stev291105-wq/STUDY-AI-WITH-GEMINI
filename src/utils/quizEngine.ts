@@ -501,8 +501,8 @@ export function stripQuestionBoilerplate(input: string): string {
 
   // 3. Repeatedly strip leading meta-reference clauses ending in a comma or colon (for declarative statements, True/False, Fill-in-Blank, Open-ended)
   const leadingBoilerplatePatterns: RegExp[] = [
-    /^(?:seg[úu]n|de acuerdo con|conforme a|a partir de|tomando en cuenta|considerando|en base a|con base en)\s+(?:lo\s+(?:expuesto|establecido|mencionado|descrito|explicado|indicado|planteado|visto|desarrollado)\s+en\s+)?(?:el|la|los|las|este|esta)?\s*(?:secci[óo]n|apartado|cap[íi]tulo|unidad|m[óo]dulo|tema|tem[áa]tica|p[áa]gina|p[áa]g\.?|libro|manual|documento|texto|archivo|gu[íi]a|apunte|apuntes|diapositiva|esquema|infograf[íi]a|lectura|obra|material)[^,?:;]{0,140}[,:]\s*/i,
-    /^(?:en|dentro de|al analizar|respecto a|en relaci[óo]n con|con respecto a)\s+(?:el|la|los|las)\s+(?:an[áa]lisis(?:\s+t[ée]cnico)?\s+de|desarrollo\s+de|estudio\s+de|planteamiento\s+de|criterio\s+expuesto\s+en|expuesto\s+en)?\s*(?:el|la|los|las)?\s*(?:secci[óo]n|apartado|cap[íi]tulo|unidad|m[óo]dulo|tema|tem[áa]tica|p[áa]gina|p[áa]g\.?|libro|manual|documento|texto|archivo|gu[íi]a|apunte|diapositiva|esquema|infograf[íi]a)[^,?:;]{0,140}[,:]\s*/i,
+    /^(?:seg[úu]n|de acuerdo con|conforme a|a partir de|tomando en cuenta|considerando|en base a|con base en)\s+(?:lo\s+(?:expuesto|establecido|mencionado|descrito|explicado|indicado|planteado|visto|desarrollado)\s+en\s+)?(?:(?:el|la|los|las|este|esta)\s+)?(?:secci[óo]n|apartado|cap[íi]tulo|unidad|m[óo]dulo|tema|tem[áa]tica|p[áa]gina|p[áa]g\.?|libro|manual|documento|texto|archivo|gu[íi]a|apunte|apuntes|diapositiva|esquema|infograf[íi]a|lectura|obra|material)[^,?:;]{0,140}[,:]\s*/i,
+    /^(?:en|dentro de|al analizar|respecto a|en relaci[óo]n con|con respecto a)\s+(?:el|la|los|las)\s+(?:(?:an[áa]lisis(?:\s+t[ée]cnico)?|desarrollo|estudio|planteamiento|criterio\s+expuesto|expuesto)\s+(?:de|en)\s+)?(?:(?:el|la|los|las)\s+)?(?:secci[óo]n|apartado|cap[íi]tulo|unidad|m[óo]dulo|tema|tem[áa]tica|p[áa]gina|p[áa]g\.?|libro|manual|documento|texto|archivo|gu[íi]a|apunte|diapositiva|esquema|infograf[íi]a)[^,?:;]{0,140}[,:]\s*/i,
     /^(?:en|dentro de)\s+«[^»]{2,90}»(?:\s*\([^)]{1,60}\))?\s*[,:]\s*/i,
     /^(?:seg[úu]n|de acuerdo con|conforme a)\s+["«][^"»]{2,90}["»](?:\s*\([^)]{1,60}\))?\s*[,:]\s*/i,
     /^(?:el\s+(?:documento|manual|libro|texto|apartado|cap[íi]tulo)\s+(?:sostiene|establece|indica|menciona|afirma|se[ñn]ala)\s+que)\s+/i,
@@ -656,8 +656,8 @@ export function normalizeStudyNotesLine(
   baseDocTopic: string
 ): string {
   let line = rawLine
-    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d+(?:\s*[-–a,y]\s*\d+)*\s*\)/gi, '')
-    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d+(?:\s*(?:[-–a]|y|e)\s*\d+)*\b/gi, '')
+    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d[\d\s,y\-–a]{0,18}\)/gi, '')
+    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d+(?:\s*[-–]\s*\d+)?\b/gi, '')
     .replace(/\(\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d+(?:\s*[-–]\s*\d+)?)?\s*\)/gi, '')
     .replace(/^[\s•\-*]+/, '')
     .replace(/^\d+(?:\.\d+)?\s*[.)\-–]\s*/, '')
@@ -668,14 +668,14 @@ export function normalizeStudyNotesLine(
   if (!line) return '';
 
   // Pattern 1: "Autor (País): idea" e.g. "Bleger (Argentina): define la entrevista psicológica..." or "Bohoslavsky (Argentina): modalidad clínica..."
-  const authorCountryMatch = /^([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:\s+(?:y|e|de|del)\s+[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+|\s+[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+){0,3})\s*\(\s*([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s]{2,25})\s*\)\s*[:\-–]\s*(.+)$/.exec(
+  const authorCountryMatch = /^([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s]{1,50}?)\s*\(\s*([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s]{2,25})\s*\)\s*[:\-–]\s*(.+)$/.exec(
     line
   );
   if (authorCountryMatch && authorCountryMatch[1] && authorCountryMatch[2] && authorCountryMatch[3]) {
     const author = authorCountryMatch[1].trim();
     const country = authorCountryMatch[2].trim();
     const idea = authorCountryMatch[3].replace(/[.]+$/, '').trim();
-    if (idea.length >= 8) {
+    if (idea.length >= 8 && !hasFiniteSpanishVerb(author)) {
       if (hasFiniteSpanishVerb(idea)) {
         const startsWithVerb = /^(?:define|plantea|propone|sostiene|introduce|desarrolla|establece|afirma|postula|concibe|distingue|analiza|describe|explica|caracteriza|crea|formula|estudia|considera)\b/i.test(
           idea
@@ -704,7 +704,7 @@ export function normalizeStudyNotesLine(
     ) {
       // Check if rightBody is "Autores - idea" or "(según Autores) - idea"
       const cleanedRightForAuthor = rightBody.replace(/\(\s*seg[úu]n\s+([^)]+)\)/gi, '$1');
-      const authorDashIdea = /^([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:\s+(?:y|e|de|del|,)\s*[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+|\s+[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+){0,5})\s*[-–—]\s*(.{10,})$/.exec(
+      const authorDashIdea = /^([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ,\s]{1,65}?)\s*[-–—]\s*(.{10,})$/.exec(
         cleanedRightForAuthor
       );
       if (authorDashIdea && authorDashIdea[1] && authorDashIdea[2] && !hasFiniteSpanishVerb(authorDashIdea[1])) {
@@ -754,8 +754,8 @@ function extractHeadingTopic(line: string): string | null {
   const trimmed = line
     .replace(/^[\s•\-*#R:;«»]+/, '')
     .replace(/\[OCR[^\]]*\]:?/gi, '')
-    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d+(?:\s*[-–a,y]\s*\d+)*\s*\)/gi, '')
-    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d+(?:\s*(?:[-–a]|y|e)\s*\d+)*\b/gi, '')
+    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d[\d\s,y\-–a]{0,18}\)/gi, '')
+    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d+(?:\s*[-–]\s*\d+)?\b/gi, '')
     .replace(/\(\s*(?:18|19|20)\d{2}[a-z]?\s*\)/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -863,8 +863,8 @@ function extractConceptPhrase(sentence: string, fallbackKeywords: string[], topi
     }
   }
 
-  // 2. Check subject noun phrase before a defining verb
-  const subjectMatch = /^(?:El|La|Los|Las|Un|Una)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:\s+(?:de|del|en|para|por|la|el|los|las|y|o|a|vs\.)?\s*[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9\-()]+){0,6}?)\s+(?:,\s*donde\s+|\s*)(?:es|son|se\s+inicia|constituye|consiste|permite|destaca|alcanz[óo]|fue|fueron|se\s+registra|se\s+genera|funciona|opera|impone|establece|representa|comprende|requiere|incluye|eval[úu]a|depende|act[úu]a|induce|fija|consume|recicla|desencadena|emplean|determin[óo]|lo\s+ejerce|lo\s+ejercen|inserta|plantea|define|propone)/i.exec(
+  // 2. Check subject noun phrase before a defining verb (100% linear O(N) regex)
+  const subjectMatch = /^(?:El|La|Los|Las|Un|Una)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9\-()\s.]{2,65}?)\s+(?:,\s*donde\s+|\s*)(?:es|son|se\s+inicia|constituye|consiste|permite|destaca|alcanz[óo]|fue|fueron|se\s+registra|se\s+genera|funciona|opera|impone|establece|representa|comprende|requiere|incluye|eval[úu]a|depende|act[úu]a|induce|fija|consume|recicla|desencadena|emplean|determin[óo]|lo\s+ejerce|lo\s+ejercen|inserta|plantea|define|propone)\b/i.exec(
     cleanedSentence.trim()
   );
   if (subjectMatch && subjectMatch[1]) {
@@ -1278,6 +1278,7 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
   allAuthors: string[];
 } {
   const sentences: ExtractedSentence[] = [];
+  const seenSentenceSet = new Set<string>();
   const keywordCounts = new Map<string, { original: string; count: number }>();
   const conceptPhrasesSet = new Set<string>();
   const authorsSet = new Set<string>();
@@ -1304,12 +1305,14 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
     }
 
     const fullText = parts.join('\n');
-    const lines = fullText.split(/\n+/);
+    const rawLines = fullText.split(/\n+/).map(l => l.trim()).filter(Boolean);
+    const lineStep = rawLines.length > 280 ? Math.max(1, Math.floor(rawLines.length / 280)) : 1;
     let currentHeading: string | null = null;
     let lastConceptPhrase: string | null = null;
+    let docSentenceCount = 0;
 
-    for (const rawLine of lines) {
-      const trimmedLine = rawLine.trim();
+    for (let lineIdx = 0; lineIdx < rawLines.length; lineIdx++) {
+      const trimmedLine = rawLines[lineIdx];
       if (!trimmedLine) continue;
 
       const possibleHeading = extractHeadingTopic(trimmedLine);
@@ -1318,6 +1321,13 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
         if (trimmedLine.length < 65 || !/[.!?]$/.test(trimmedLine)) {
           continue;
         }
+      }
+
+      if (lineStep > 1 && lineIdx % lineStep !== 0) {
+        continue;
+      }
+      if (docSentenceCount >= 110) {
+        break;
       }
 
       const normalizedLine = normalizeStudyNotesLine(
@@ -1352,6 +1362,7 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
         );
 
       for (const rawChunk of rawChunks) {
+        if (docSentenceCount >= 110) break;
         const effectiveHeading = currentHeading;
 
         // Resolve implicit or anaphoric subjects so the sentence has full standalone context
@@ -1394,7 +1405,9 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
 
         if (chunkKeywords.length >= 1) {
           const cleanSentenceText = ensurePeriod(chunk);
-          if (!sentences.some(existing => normalizeText(existing.text) === normalizeText(cleanSentenceText))) {
+          const normKey = normalizeText(cleanSentenceText);
+          if (!seenSentenceSet.has(normKey)) {
+            seenSentenceSet.add(normKey);
             const conceptPhrase = extractConceptPhrase(
               cleanSentenceText,
               chunkKeywords,
@@ -1429,6 +1442,7 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
               semanticClass,
               authorName,
             });
+            docSentenceCount++;
           }
         }
       }
@@ -2760,17 +2774,23 @@ export function generateFallbackQuestions(
   const totalSentences = stratifiedSentences.length;
   const maxAngles = 3;
   let serialCounter = 1;
+  const maxSentencesPerAngle = Math.min(totalSentences, Math.max(questionCount * 3, 28));
+  const targetPoolSize = Math.max(questionCount * 4, 36);
+  const rawSynthesizedFallback: Question[] = [];
 
   for (let angle = 0; angle < maxAngles; angle++) {
+    if (candidatePool.length >= targetPoolSize) break;
     const activeAngle = (angle + currentRunIndex + diffOffset) % maxAngles;
 
-    for (let sIdx = 0; sIdx < totalSentences; sIdx++) {
+    for (let sIdx = 0; sIdx < maxSentencesPerAngle; sIdx++) {
+      if (candidatePool.length >= targetPoolSize) break;
       const rotatedIdx = (sIdx + currentRunIndex * 2 + diffOffset) % totalSentences;
       const sObj = stratifiedSentences[rotatedIdx];
 
-      // Pick a distinct partner sentence from another concept/section for cross-analysis
+      // Pick a distinct partner sentence from another concept/section for cross-analysis (bounded to at most 12 steps)
       let partnerObj = stratifiedSentences[(rotatedIdx + Math.max(1, Math.floor(totalSentences / 2))) % totalSentences];
-      for (let step = 1; step < totalSentences; step++) {
+      const maxPartnerSteps = Math.min(totalSentences, 12);
+      for (let step = 1; step < maxPartnerSteps; step++) {
         const candidatePartner = stratifiedSentences[(rotatedIdx + step) % totalSentences];
         if (
           normalizeText(candidatePartner.specificTopic) !== normalizeText(sObj.specificTopic) ||
@@ -2798,6 +2818,7 @@ export function generateFallbackQuestions(
 
       // Run Automatic Final Quality Gate on the synthesized question
       const qualityCheck = validateQuestionQualityGate(synthesized);
+      rawSynthesizedFallback.push(qualityCheck.question);
       if (!qualityCheck.valid) {
         continue;
       }
@@ -2813,6 +2834,19 @@ export function generateFallbackQuestions(
         sentenceAngleKey,
         themeKey: normalizeText(`${validQuestion.topicTitle}::${validQuestion.specificTopic}`),
         wasUsedBefore,
+      });
+    }
+  }
+
+  // Guarantee candidatePool is never empty even on unusual short inputs
+  if (candidatePool.length === 0 && rawSynthesizedFallback.length > 0) {
+    for (let i = 0; i < rawSynthesizedFallback.length; i++) {
+      const q = rawSynthesizedFallback[i];
+      candidatePool.push({
+        question: q,
+        sentenceAngleKey: `fallback-${i}`,
+        themeKey: normalizeText(`${q.topicTitle}::${q.specificTopic}`),
+        wasUsedBefore: false,
       });
     }
   }

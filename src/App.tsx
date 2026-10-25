@@ -64,21 +64,28 @@ export default function App() {
         const savedDocs = sessionStorage.getItem('studymaster_session_docs_v1');
         if (savedDocs) {
           const parsed = JSON.parse(savedDocs);
-          if (Array.isArray(parsed)) return parsed;
+          if (Array.isArray(parsed)) {
+            return parsed.map((d: UploadedDoc) => ({
+              ...d,
+              status: 'ready',
+              selected: d.selected !== false,
+            }));
+          }
         }
       } catch {}
     }
     return [];
   });
 
-  // Save documents in session history (sessionStorage)
+  // Save documents in session history (sessionStorage) without blocking on ultra-large payloads
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try {
         const lightweightDocs = documents.map(d => ({
           ...d,
-          // Avoid exceeding sessionStorage quota on huge binary images while keeping full rawText
-          base64Data: d.base64Data && d.base64Data.length > 350000 ? undefined : d.base64Data,
+          status: 'ready' as const,
+          rawText: d.rawText && d.rawText.length > 80000 ? d.rawText.slice(0, 80000) : d.rawText,
+          base64Data: d.base64Data && d.base64Data.length > 250000 ? undefined : d.base64Data,
         }));
         sessionStorage.setItem('studymaster_session_docs_v1', JSON.stringify(lightweightDocs));
       } catch {}
@@ -251,24 +258,44 @@ export default function App() {
     }
   };
 
+  const launchQuizSession = (quizQuestions: Question[]) => {
+    setQuestions(quizQuestions);
+    setCurrentIndex(0);
+    setAnswers({});
+    setQuizStartTime(Date.now());
+    setAppState('playing');
+    if (typeof window !== 'undefined') {
+      try {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch {
+        window.scrollTo(0, 0);
+      }
+    }
+  };
+
   // Start Quiz generator
   const handleStartQuiz = async () => {
     const selectedDocs = documents.filter(d => d.selected !== false);
-    if (selectedDocs.length === 0) {
+    const activeDocs = selectedDocs.length > 0 ? selectedDocs : documents;
+    if (activeDocs.length === 0) {
       return;
     }
-    const activeDocs = selectedDocs;
 
     setAppQuotaMessage('');
 
     // Case 0: Modo Estudio Sin IA (100% local, instant, strictly from activeDocs)
     if (config.engineMode === 'no_ai') {
-      const localQuestions = generateFallbackQuestions(activeDocs, config);
-      setQuestions(localQuestions);
-      setCurrentIndex(0);
-      setAnswers({});
-      setQuizStartTime(Date.now());
-      setAppState('playing');
+      setIsGenerating(true);
+      try {
+        const localQuestions = generateFallbackQuestions(activeDocs, config);
+        launchQuizSession(localQuestions);
+      } catch (err) {
+        console.error('Local quiz generation error:', err);
+        const recoveryQuestions = generateFallbackQuestions(PRESET_SAMPLE_DOCUMENTS, config);
+        launchQuizSession(recoveryQuestions);
+      } finally {
+        setIsGenerating(false);
+      }
       return;
     }
 
@@ -283,6 +310,7 @@ export default function App() {
       setIsGenerating(true);
       try {
         // Ensure any uploaded docs that haven't been OCR'd by Gemini yet (e.g. images) get analyzed first
+        const enrichedById = new Map<string, UploadedDoc>();
         const enrichedDocs: UploadedDoc[] = [];
         for (const d of activeDocs) {
           if (!d.id.startsWith('sample-doc-') && (!d.rawText || d.rawText.length < 40) && d.base64Data) {
@@ -290,10 +318,12 @@ export default function App() {
               const ocr = await analyzeVisitorDocWithGemini(d, visitorState.apiKey, visitorState.model);
               const updatedDoc: UploadedDoc = {
                 ...d,
+                status: 'ready',
                 rawText: ocr.extractedText || d.rawText,
                 analysis: ocr.analysis || d.analysis,
               };
               enrichedDocs.push(updatedDoc);
+              enrichedById.set(updatedDoc.id, updatedDoc);
             } catch {
               enrichedDocs.push(d);
             }
@@ -301,7 +331,9 @@ export default function App() {
             enrichedDocs.push(d);
           }
         }
-        setDocuments(enrichedDocs);
+        if (enrichedById.size > 0) {
+          setDocuments(prev => prev.map(d => enrichedById.get(d.id) || d));
+        }
 
         const generated = await generateVisitorQuestionsWithGemini(
           enrichedDocs,
@@ -309,22 +341,15 @@ export default function App() {
           visitorState.apiKey,
           visitorState.model
         );
-        setQuestions(sanitizeAndValidateQuestions(generated, enrichedDocs, config));
-        setCurrentIndex(0);
-        setAnswers({});
-        setQuizStartTime(Date.now());
-        setAppState('playing');
+        const validated = sanitizeAndValidateQuestions(generated, enrichedDocs, config);
+        launchQuizSession(validated.length > 0 ? validated : generateFallbackQuestions(enrichedDocs, config));
       } catch (err: any) {
         if (err.message?.includes('Alcanzaste el límite gratuito') || err.message?.includes('429')) {
           setAppQuotaMessage('Alcanzaste el límite gratuito de tu cuenta de Gemini; espera un minuto o usa el Modo Estudio Sin IA.');
         }
         // Fallback generator strictly from activeDocs
         const fallback = generateFallbackQuestions(activeDocs, config);
-        setQuestions(fallback);
-        setCurrentIndex(0);
-        setAnswers({});
-        setQuizStartTime(Date.now());
-        setAppState('playing');
+        launchQuizSession(fallback);
       } finally {
         setIsGenerating(false);
       }
@@ -346,24 +371,16 @@ export default function App() {
       const data = await res.json();
 
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
-        setQuestions(sanitizeAndValidateQuestions(data.questions, activeDocs, config));
+        const validated = sanitizeAndValidateQuestions(data.questions, activeDocs, config);
+        launchQuizSession(validated.length > 0 ? validated : generateFallbackQuestions(activeDocs, config));
       } else {
         const fallback = generateFallbackQuestions(activeDocs, config);
-        setQuestions(fallback);
+        launchQuizSession(fallback);
       }
-
-      setCurrentIndex(0);
-      setAnswers({});
-      setQuizStartTime(Date.now());
-      setAppState('playing');
     } catch (err) {
       console.warn('Questions generation fallback:', err);
       const fallback = generateFallbackQuestions(activeDocs, config);
-      setQuestions(fallback);
-      setCurrentIndex(0);
-      setAnswers({});
-      setQuizStartTime(Date.now());
-      setAppState('playing');
+      launchQuizSession(fallback);
     } finally {
       setIsGenerating(false);
     }
