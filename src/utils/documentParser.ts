@@ -15,54 +15,95 @@ export const SPANISH_STOPWORDS = new Set([
   'estar', 'está', 'esta', 'están', 'estan', 'estaba', 'haber', 'ha', 'han', 'había',
   'hay', 'tener', 'tiene', 'tienen', 'tenía', 'hacer', 'hace', 'hacen', 'puede', 'pueden',
   'podría', 'debe', 'deben', 'se', 'le', 'les', 'lo', 'me', 'te', 'nos', 'os', 'uno',
-  'dos', 'tres', 'parte', 'tipo', 'forma', 'manera', 'caso', 'ejemplo', 'través', 'traves',
-  'durante', 'mediante', 'alcanzó', 'alcanzo', 'realiza', 'realizaba', 'caracteriza',
+  'dos', 'tres', 'cuatro', 'cinco', 'seis', 'parte', 'partes', 'tipo', 'tipos', 'forma',
+  'formas', 'manera', 'caso', 'casos', 'ejemplo', 'través', 'traves', 'durante', 'mediante',
+  'alcanzó', 'alcanzo', 'realiza', 'realizaba', 'realizar', 'caracteriza', 'establecer',
+  'establece', 'establecen', 'inicia', 'iniciar', 'permite', 'permiten', 'permitir',
+  'consiste', 'consisten', 'constituye', 'constituyen', 'comprende', 'comprenden',
+  'desarrolla', 'desarrollado', 'utiliza', 'utilizan', 'utilizar', 'genera', 'generan',
+  'generados', 'produce', 'producen', 'producidas', 'requiere', 'requieren', 'incluye',
+  'incluyen', 'impone', 'verificar', 'ejercer', 'determinó', 'determino', 'determinar',
+  'formular', 'evaluar', 'evalúa', 'evalua', 'comunicar', 'adaptando', 'adaptar',
+  'comprender', 'explicar', 'aplicar', 'obtener', 'presentar', 'lograr', 'funciona',
+  'destaca', 'emplean', 'suele', 'suelen', 'solo', 'sólo', 'además', 'asimismo',
+  'dentro', 'fuera', 'antes', 'después', 'despues', 'siempre', 'nunca', 'importante',
+  'importantes', 'fundamental', 'fundamentales', 'principal', 'principales', 'general',
+  'generales', 'específico', 'especifica', 'específicos', 'específicas', 'directamente',
+  'diferencia', 'diferentes', 'distintos', 'distintas', 'diversos', 'diversas', 'nivel',
+  'niveles', 'proceso', 'procesos', 'elemento', 'elementos', 'aspecto', 'aspectos',
+  'punto', 'puntos', 'área', 'area', 'áreas', 'areas', 'estudio', 'material', 'texto',
   'page', 'pagina', 'página', 'paginas', 'páginas', 'documento', 'archivo', 'resumen',
   'oral', 'capítulo', 'capitulo', 'diapositiva', 'slide', 'nota', 'notas', 'tema', 'temas'
 ]);
 
 /**
- * Checks whether a word exhibits PDF CMap collision corruption, OCR gibberish, or invalid Spanish structure.
- * Specifically catches artifacts like "sicodiagnósticoAyAEntM", "eNista", "ageA", "AofA", "C5".
+ * Checks whether a word exhibits PDF CMap collision corruption or OCR gibberish.
+ * Specifically catches artifacts like "sicodiagnósticoAyAEntM", "eNista", "ageA", "AofA", "C5", "esumenApaMaAelAoMal"
+ * while preserving all legitimate Spanish words (including "construcción", "instrumento", "transferencia", "perspectiva")
+ * and valid academic acronyms ("RuBisCO", "RuBP", "CADH", "RNNs", "ATP", "NADPH", "G3P", "T5").
  */
 export function isCorruptedToken(word: string): boolean {
   if (!word) return true;
-  const clean = word.replace(/^[.,;:"'«»()[\]¿?¡!\-]+|[.,;:"'«»()[\]¿?¡!\-]+$/g, '');
-  if (!clean) return true;
+  const clean = word.replace(/^[.,;:"'«»()[\]¿?¡!\-+*/=<>~]+|[.,;:"'«»()[\]¿?¡!\-+*/=<>~]+$/g, '');
+  if (!clean) return false; // pure punctuation is not a corrupted word token
 
-  // Reject tokens mixing letters and digits unless standard biochemical/technical terms (e.g. CO2, H2O, G3P, C3, FADH2, NADH)
-  if (/\d/.test(clean) && /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(clean)) {
-    const allowedTech = /^(CO2|H2O|O2|G3P|3-PGA|C3|C4|FADH2|NADH|NADPH|ATP|ADN|ARN|C6H12O6|d_k|v1|v2)$/i;
-    if (!allowedTech.test(clean)) return true;
+  // Explicit known CMap corruption tokens
+  if (
+    /^(?:ageA|AofA|C5|eNista|EntM|paMa|oMal|esumen|sicodiagn[óo]sticoAyA.*|esumenApaMa.*)$/i.test(clean)
+  ) {
+    return true;
   }
 
-  // Reject any word with lowercase followed immediately by uppercase (e.g. "sicodiagnósticoAyAEntM", "eNista", "ageA", "AofA")
+  // Detect CMap 'A'-space cipher inside a token: e.g. "wordAyAword", "wordAdeAword", "wordAelAword"
+  if (/[a-záéíóúüñ]A(?:y|e|de|el|la|en|con|para|of|age)A[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/i.test(clean)) {
+    return true;
+  }
+
+  // Pure numbers, percentages, or Roman numerals are valid tokens in sentences/options
+  if (/^\d+(?:[.,]\d+)?%?$/.test(clean)) return false;
+  if (/^(?:I|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XV|XX|XXI)$/.test(clean)) return false;
+
+  // Reject tokens mixing letters and digits unless valid scientific/technical terms
+  if (/\d/.test(clean) && /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(clean)) {
+    const allowedTech = /^(?:CO2|H2O|O2|G3P|3-PGA|C2|C3|C4|FADH2|NADH|NADPH|ATP|ADN|ARN|C6H12O6|d_k|v1|v2|T5|1K|2K|4K|bc1|O\(N\^2\)|N\^2|30-32)$/i;
+    if (!allowedTech.test(clean)) return true;
+    return false;
+  }
+
+  // Allowed academic/technical acronyms and mixed-case proper names
+  const allowedMixedCase = /^(?:RuBisCO|RuBP|RoPE|LaTeX|PowerPoint|OpenAI|DeepSeek|PageRank|JavaScript|TypeScript|WordPress|ChatGPT|StudyMaster|RNNs|LLMs|CNN|RNN|GPT|BERT|CADH|IDH|ATP|NADH|NADPH|FAD|ADN|ARN|OCR|HTR|PDF|PPTX|DOCX|DSM|CIE|OMS|pH|ΔpH|ΔΨ|Δp|RT\/F|sqrt)$/;
+  if (allowedMixedCase.test(clean)) return false;
+
+  // Allow standard ALL-CAPS acronyms up to 8 letters (e.g. "CADH", "URSS", "EEUU", "UNAM", "CONICET")
+  if (/^[A-ZÁÉÍÓÚÜÑ]{2,8}s?$/.test(clean)) {
+    if (/^AP[a-z]/.test(clean)) return true;
+    return false;
+  }
+
+  // Reject any word with lowercase followed immediately by uppercase (e.g. "sicodiagnósticoAyAEntM", "eNista", "ageA")
   if (/[a-záéíóúüñ][A-ZÁÉÍÓÚÜÑ]/.test(clean)) {
-    const allowedAcronym = /^(RuBisCO|RoPE|LaTeX|PowerPoint|OpenAI|DeepSeek|PageRank|JavaScript|TypeScript| WordPress)$/;
-    if (!allowedAcronym.test(clean)) return true;
+    return true;
   }
 
   // Reject Uppercase + lowercase + Uppercase collisions (e.g. "AofA", "EntM")
   if (/[A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ]+[A-ZÁÉÍÓÚÜÑ]/.test(clean)) {
-    const allowedAcronym = /^(RuBisCO|RoPE|LaTeX|PowerPoint|OpenAI|DeepSeek)$/;
-    if (!allowedAcronym.test(clean)) return true;
-  }
-
-  // Reject 2+ uppercase letters followed by lowercase (e.g. "APsicodiagnóstico")
-  if (/^[A-ZÁÉÍÓÚÜÑ]{2,}[a-záéíóúüñ]+/.test(clean)) {
     return true;
   }
 
-  // For purely alphabetical words >= 4 chars, check vowel ratio and consonant clusters
+  // Reject 2+ uppercase letters followed by lowercase (e.g. "APsicodiagnóstico")
+  if (/^[A-ZÁÉÍÓÚÜÑ]{2,}[a-záéíóúüñ]{2,}/.test(clean)) {
+    return true;
+  }
+
+  // For purely alphabetical words >= 4 chars, check extreme vowel ratio and impossible consonant clusters
   const lettersOnly = clean.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g, '');
   if (lettersOnly.length >= 4) {
     const vowels = (lettersOnly.match(/[aeiouáéíóúüAEIOUÁÉÍÓÚÜ]/g) || []).length;
     const ratio = vowels / lettersOnly.length;
-    // Natural Spanish words have vowel ratio between 0.25 and 0.78
-    if (ratio < 0.24 || ratio > 0.82) return true;
-    // Reject 4+ consecutive consonants (rare/impossible in Spanish)
-    if (/[bcdfghjklmnñpqrstvwxyzBCDFGHJKLMNÑPQRSTVWXYZ]{4,}/.test(lettersOnly)) return true;
-    // Reject 3 identical consecutive letters
+    if (ratio < 0.18 || ratio > 0.86) return true;
+    // Note: Spanish words like "construcción", "instrumento", "transferencia", "abstracto" have 4-consonant clusters (nstr, nsfr, bstr).
+    // Only reject 6+ consecutive consonants or 3 identical consecutive letters.
+    if (/[bcdfghjklmnñpqrstvwxyzBCDFGHJKLMNÑPQRSTVWXYZ]{6,}/.test(lettersOnly)) return true;
     if (/(.)\1\1/i.test(lettersOnly)) return true;
   }
 
@@ -70,12 +111,13 @@ export function isCorruptedToken(word: string): boolean {
 }
 
 /**
- * Checks whether a word is a clean, meaningful Spanish study concept suitable for quiz questions and options.
+ * Checks whether a word is a clean, meaningful Spanish study concept (noun/technical term)
+ * suitable for quiz questions and options.
  */
 export function isValidSpanishStudyWord(word: string): boolean {
   if (!word) return false;
   const clean = word.trim().replace(/^[.,;:"'«»()[\]¿?¡!\-]+|[.,;:"'«»()[\]¿?¡!\-]+$/g, '');
-  if (clean.length < 4 || clean.length > 34) return false;
+  if (clean.length < 4 || clean.length > 36) return false;
   if (/^\d+$/.test(clean)) return false;
   if (SPANISH_STOPWORDS.has(clean.toLowerCase())) return false;
   if (isCorruptedToken(clean)) return false;
@@ -83,7 +125,6 @@ export function isValidSpanishStudyWord(word: string): boolean {
   // Must start with a valid letter
   if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(clean)) return false;
 
-  // Reject broken word fragments from split PDF glyphs (e.g. "sicodiagnóstico" missing initial P, "eNista", "ageA", "esumen")
   const lower = clean.toLowerCase();
   if (
     lower.startsWith('sicodiagn') ||
@@ -96,6 +137,15 @@ export function isValidSpanishStudyWord(word: string): boolean {
     lower === 'omal' ||
     lower === 'page' ||
     lower === 'pagina'
+  ) {
+    return false;
+  }
+
+  // Filter out common verb endings in infinitive/gerund/participle when looking for nominal study concepts
+  if (
+    /(?:ando|iendo|arse|erse|irse|aron|ieron)$/.test(lower) &&
+    !lower.includes('educando') &&
+    !lower.includes('dividendo')
   ) {
     return false;
   }
@@ -127,8 +177,96 @@ function repairSubsetFontCipher(input: string): string {
 }
 
 /**
+ * Checks if a line looks like a standalone section/topic heading rather than wrapped body prose.
+ */
+function isStandaloneHeadingLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.length > 85) return false;
+  if (/^(?:tema|cap[íi]tulo|unidad|secci[óo]n|m[óo]dulo|fase|diapositiva|t[íi]tulo|apartado)\s*\d*\s*[:.\-–]/i.test(trimmed)) {
+    return true;
+  }
+  if (/^\d+(?:\.\d+)?\s*[.)\-–]\s*[A-ZÁÉÍÓÚÜÑ]/.test(trimmed) && !/[.!?]$/.test(trimmed)) {
+    return true;
+  }
+  const words = trimmed.split(/\s+/);
+  if (words.length >= 2 && words.length <= 8 && !/[.!?,;]$/.test(trimmed) && /^[A-ZÁÉÍÓÚÜÑ]/.test(trimmed)) {
+    // Check that it doesn't end with a preposition/article indicating a wrapped sentence line
+    const lastWord = words[words.length - 1].toLowerCase().replace(/[^a-záéíóúüñ]/g, '');
+    const danglingEndings = new Set([
+      'el', 'la', 'los', 'las', 'un', 'una', 'de', 'del', 'al', 'a', 'en', 'con', 'por',
+      'para', 'sin', 'sobre', 'entre', 'hacia', 'hasta', 'según', 'como', 'que', 'y', 'o',
+      'su', 'sus', 'este', 'esta', 'estos', 'estas', 'es', 'son', 'se', 'no', 'más'
+    ]);
+    if (danglingEndings.has(lastWord)) return false;
+    // Also if it contains a finite verb like "es", "son", "inicia", "constituye", "permite", it's a wrapped sentence, not a heading
+    if (/\b(?:es|son|está|están|fue|fueron|inicia|constituye|permite|establece|consiste|evalúa|comprende|impone|debe|puede)\b/i.test(trimmed)) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Reconstructs complete paragraphs and sentences from PDF/OCR line wraps so sentences are never cut mid-clause.
+ */
+function reconstructParagraphLines(lines: string[]): string[] {
+  const result: string[] = [];
+  let buffer = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    if (!line) {
+      if (buffer) {
+        result.push(buffer);
+        buffer = '';
+      }
+      result.push('');
+      continue;
+    }
+
+    // If current line is a standalone heading or starts a new bullet/numbered item, flush buffer first
+    const startsNewBlock =
+      isStandaloneHeadingLine(line) ||
+      /^(?:[•\-*]\s+|\d+(?:\.\d+)?\s*[.)\-–]\s+|[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ\s]{2,35}:\s+)/.test(line);
+
+    if (startsNewBlock) {
+      if (buffer) {
+        result.push(buffer);
+        buffer = '';
+      }
+      if (isStandaloneHeadingLine(line)) {
+        result.push(line);
+      } else {
+        buffer = line;
+      }
+      continue;
+    }
+
+    if (!buffer) {
+      buffer = line;
+    } else {
+      // If buffer already ended with terminal punctuation (. ! ?), check if `line` starts a new sentence or paragraph
+      if (/[.!?]["'»)]?$/.test(buffer)) {
+        buffer = `${buffer} ${line}`;
+      } else {
+        // Wrapped line inside the same sentence! Join with space
+        buffer = `${buffer} ${line}`;
+      }
+    }
+  }
+
+  if (buffer) {
+    result.push(buffer);
+  }
+
+  return result;
+}
+
+/**
  * Repairs and sanitizes raw text extracted from PDFs or OCR, removing pagination headers/footers,
- * OCR border noise, and fixing CMap space-collision artifacts (such as 'A' injected in place of spaces).
+ * OCR border noise, and fixing CMap space-collision artifacts while preserving complete sentences.
  */
 export function sanitizeAcademicText(raw: string): string {
   if (!raw) return '';
@@ -160,9 +298,8 @@ export function sanitizeAcademicText(raw: string): string {
   const cleanLines: string[] = [];
 
   for (const rawLine of lines) {
-    // Strip leading isolated garbage prefixes like "R :" or ":AP"
     const line = rawLine
-      .replace(/^\s*(?:R\s*:|:+\s*AP\b|[:;*•·\-–—]+\s*)/i, '')
+      .replace(/^\s*(?:R\s*:|:+\s*AP\b|[:;]+\s*)/i, '')
       .replace(/[ \t]+/g, ' ')
       .trim();
 
@@ -174,7 +311,6 @@ export function sanitizeAcademicText(raw: string): string {
     const words = line.split(/\s+/).filter(Boolean);
     if (words.length === 0) continue;
 
-    // Count how many tokens in this line are corrupted
     let corruptedCount = 0;
     let validLongWords = 0;
     for (const w of words) {
@@ -185,8 +321,7 @@ export function sanitizeAcademicText(raw: string): string {
       }
     }
 
-    // If more than 30% of tokens on the line are corrupted CMap garbage, strip corrupted tokens or skip line
-    if (corruptedCount / words.length > 0.3) {
+    if (corruptedCount / words.length > 0.35) {
       const salvaged = words.filter(w => !isCorruptedToken(w)).join(' ');
       if (salvaged.length >= 25 && validLongWords >= 3) {
         cleanLines.push(salvaged);
@@ -194,14 +329,16 @@ export function sanitizeAcademicText(raw: string): string {
       continue;
     }
 
-    // Remove isolated corrupted tokens embedded in an otherwise valid line
-    const filteredLine = words.filter(w => !isCorruptedToken(w) || w.length <= 2).join(' ');
+    const filteredLine = words.filter(w => !isCorruptedToken(w)).join(' ');
     if (filteredLine.trim()) {
       cleanLines.push(filteredLine.trim());
     }
   }
 
-  return cleanLines
+  // 5. Rejoin wrapped lines within the same paragraph so multi-line sentences stay intact
+  const reconstructed = reconstructParagraphLines(cleanLines);
+
+  return reconstructed
     .join('\n')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
@@ -209,19 +346,33 @@ export function sanitizeAcademicText(raw: string): string {
 }
 
 /**
- * Validates whether a sentence is clean, natural Spanish prose suitable for turning into a study question.
+ * Validates whether a sentence is clean, natural, complete Spanish prose suitable for turning into a study question.
  */
 export function isCleanStudySentence(sentence: string): boolean {
   if (!sentence) return false;
   const trimmed = sentence.trim();
-  if (trimmed.length < 25 || trimmed.length > 480) return false;
+  if (trimmed.length < 30 || trimmed.length > 520) return false;
 
   // Reject sentences containing page numbers or CMap corruption patterns
   if (/\b(?:Page|P[áa]gina)\s+\d+/i.test(trimmed)) return false;
   if (/\bAofA\b|\bageA\b|\bsicodiagn[óo]sticoAyA/i.test(trimmed)) return false;
 
   const tokens = trimmed.split(/\s+/).filter(Boolean);
-  if (tokens.length < 5) return false;
+  if (tokens.length < 6) return false;
+
+  // Reject sentences cut off mid-clause (ending with an article, preposition, conjunction, or 1-2 char truncated fragment)
+  const lastTokenClean = tokens[tokens.length - 1]
+    .replace(/[.,;!?»"')[\]]+$/g, '')
+    .toLowerCase();
+  const danglingWords = new Set([
+    'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'al', 'a', 'en',
+    'con', 'por', 'para', 'sin', 'sobre', 'entre', 'hacia', 'hasta', 'desde', 'según',
+    'segun', 'como', 'que', 'qué', 'cual', 'quien', 'donde', 'cuando', 'este', 'esta',
+    'estos', 'estas', 'ese', 'esa', 'su', 'sus', 'mi', 'tu', 'y', 'e', 'o', 'u', 'ni',
+    'pero', 'sino', 'porque', 'pues', 'si', 'no', 'más', 'mas', 'muy', 'tan', 'se', 'le',
+    'lo', 'pa', 'ps', 'pr', 'tr', 'cl', 'di', 'in', 'co', 're', 'es', 'son'
+  ]);
+  if (danglingWords.has(lastTokenClean)) return false;
 
   let corrupted = 0;
   let validStudyWords = 0;
@@ -234,7 +385,6 @@ export function isCleanStudySentence(sentence: string): boolean {
     }
   }
 
-  // Must have zero CMap-corrupted words or < 10% noise, and at least 2 valid study concepts
   if (corrupted > 0 && corrupted / tokens.length > 0.08) return false;
   if (validStudyWords < 2) return false;
 
@@ -472,7 +622,6 @@ async function preprocessImageForOCR(source: File | Blob | HTMLCanvasElement | s
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(img, 0, 0, width, height);
 
-    // Smooth grayscale + automatic dark-background inversion so Tesseract LSTM preserves anti-aliased glyph edges
     const imgData = ctx.getImageData(0, 0, width, height);
     const data = imgData.data;
     let totalLum = 0;
@@ -546,7 +695,6 @@ export async function extractImageTextWithOCR(
  */
 async function extractPdfWithPdfJs(buffer: ArrayBuffer): Promise<string> {
   try {
-    // Register in-process worker handler on globalThis.pdfjsWorker so pdfjs-dist works in both Vite browser and Node test runner without external CDN or UnknownErrorException
     // @ts-expect-error - pdf.worker.mjs does not ship a separate .d.mts file
     const workerModule = await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
     if (typeof globalThis !== 'undefined' && !(globalThis as any).pdfjsWorker) {
@@ -621,7 +769,6 @@ async function extractPdfWithPdfJs(buffer: ArrayBuffer): Promise<string> {
       if (cleanedPage.trim().length >= 30) {
         pageTexts.push(cleanedPage.trim());
       } else if (typeof document !== 'undefined' && pageNum <= 5) {
-        // Hybrid or scanned PDF page: render page to canvas and run OCR on the embedded image/scan!
         try {
           const viewport = page.getViewport({ scale: 1.85 });
           const canvas = document.createElement('canvas');
@@ -688,7 +835,6 @@ function decodePdfLiteralString(str: string): string {
 
 /**
  * Fallback stream extractor for minimal synthetic PDFs without xref tables.
- * Uses isolated per-stream CMaps so multi-font CMaps NEVER collide globally.
  */
 async function extractPdfTextFallback(buffer: ArrayBuffer): Promise<string> {
   const bytes = new Uint8Array(buffer);
@@ -697,7 +843,6 @@ async function extractPdfTextFallback(buffer: ArrayBuffer): Promise<string> {
   const rawPdf = latin1Decoder.decode(bytes);
 
   const extractedBlocks: string[] = [];
-  let activeCMap = new Map<string, string>();
 
   let searchPos = 0;
   let streamCount = 0;
@@ -721,27 +866,6 @@ async function extractPdfTextFallback(buffer: ArrayBuffer): Promise<string> {
       const streamContent = decompressed
         ? latin1Decoder.decode(decompressed)
         : rawPdf.slice(startOffset, endOffset);
-
-      if (streamContent.includes('beginbfchar') || streamContent.includes('beginbfrange')) {
-        // Scope CMap to a fresh map so different fonts do not overwrite each other's glyph IDs
-        activeCMap = new Map<string, string>();
-        const bfcharRegex = /beginbfchar([\s\S]*?)endbfchar/g;
-        let block: RegExpExecArray | null;
-        while ((block = bfcharRegex.exec(streamContent)) !== null) {
-          const pairRegex = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g;
-          let pair: RegExpExecArray | null;
-          while ((pair = pairRegex.exec(block[1])) !== null) {
-            const src = pair[1].toUpperCase();
-            const dstHex = pair[2];
-            let str = '';
-            for (let i = 0; i + 3 < dstHex.length; i += 4) {
-              const cp = parseInt(dstHex.slice(i, i + 4), 16);
-              if (!isNaN(cp)) str += String.fromCodePoint(cp);
-            }
-            if (str) activeCMap.set(src, str);
-          }
-        }
-      }
 
       if (streamContent.includes('Tj') || streamContent.includes('TJ')) {
         const pieces: string[] = [];
@@ -825,7 +949,6 @@ export async function extractTextFromFile(file: File): Promise<{
   }
 
   if (isImage) {
-    // Perform real local OCR so "Modo Estudio Sin IA" detects text inside images and diagrams!
     const ocrText = await extractImageTextWithOCR(file);
     return {
       rawText: ocrText,

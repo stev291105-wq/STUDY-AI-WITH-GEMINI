@@ -252,6 +252,7 @@ interface ExtractedSentence {
   docName: string;
   text: string;
   keywords: string[];
+  conceptPhrase: string;
   topicTitle: string;
   sectionLabel: string;
 }
@@ -285,7 +286,7 @@ export function deriveDocumentBaseTopic(docName: string, keyThemes?: string[]): 
       })
       .join(' ');
     if (formatted.length >= 4) {
-      return formatted.slice(0, 65);
+      return formatted;
     }
   }
 
@@ -305,7 +306,7 @@ function extractHeadingTopic(line: string): string | null {
     .replace(/^[\s•\-*#R:;«»]+/, '')
     .replace(/\[OCR[^\]]*\]:?/gi, '')
     .trim();
-  if (trimmed.length < 5 || trimmed.length > 85) return null;
+  if (trimmed.length < 5 || trimmed.length > 90) return null;
 
   // Explicit heading prefixes: "Tema:", "Capítulo 4:", "Fase 1:", "Diapositiva 12:", "1.", "I."
   const explicitMatch = /^(?:tema|cap[íi]tulo|unidad|secci[óo]n|m[óo]dulo|fase|diapositiva|t[íi]tulo|apartado)\s*\d*\s*[:.\-–]\s*(.+)$/i.exec(
@@ -319,7 +320,7 @@ function extractHeadingTopic(line: string): string | null {
   }
 
   // Numbered heading e.g. "1. Entrevista Clínica" or "2.1 Evaluación Psicodiagnóstica"
-  const numberedMatch = /^\d+(?:\.\d+)?\s*[.)\-–]\s*([A-ZÁÉÍÓÚÜÑ][^.!?]{4,70})$/.exec(trimmed);
+  const numberedMatch = /^\d+(?:\.\d+)?\s*[.)\-–]\s*([A-ZÁÉÍÓÚÜÑ][^.!?]{4,75})$/.exec(trimmed);
   if (numberedMatch && numberedMatch[1]) {
     const words = numberedMatch[1].trim().split(/\s+/);
     if (words.every(w => !isCorruptedToken(w))) {
@@ -327,11 +328,20 @@ function extractHeadingTopic(line: string): string | null {
     }
   }
 
-  // Short title line without period at the end and containing valid study words
+  // Short title line without period at the end and without finite verbs
   if (!/[.!?]$/.test(trimmed)) {
     const words = trimmed.split(/\s+/).filter(Boolean);
     const validCount = words.filter(w => isValidSpanishStudyWord(w)).length;
-    if (words.length >= 2 && words.length <= 9 && validCount >= 1 && words.every(w => !isCorruptedToken(w))) {
+    const hasFiniteVerb = /\b(?:es|son|está|están|inicia|constituye|permite|establece|consiste|evalúa|comprende|impone|debe|puede)\b/i.test(
+      trimmed
+    );
+    if (
+      !hasFiniteVerb &&
+      words.length >= 2 &&
+      words.length <= 8 &&
+      validCount >= 1 &&
+      words.every(w => !isCorruptedToken(w))
+    ) {
       return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
     }
   }
@@ -340,17 +350,76 @@ function extractHeadingTopic(line: string): string | null {
 }
 
 /**
+ * Extracts a meaningful multi-word nominal concept phrase from a sentence (e.g. "entrevista semidirigida",
+ * "proceso psicodiagnóstico clínico", "control de convencionalidad", "arquitectura incaica").
+ */
+function extractConceptPhrase(sentence: string, fallbackKeyword: string): string {
+  // 1. Check if sentence starts with "Concepto: explicación"
+  const colonIdx = sentence.indexOf(':');
+  if (colonIdx >= 4 && colonIdx <= 48) {
+    const leftSide = sentence
+      .slice(0, colonIdx)
+      .replace(/^(?:tema|cap[íi]tulo|fase|diapositiva|nota|diferencia clave|sentencia hito)\s*\d*\s*/i, '')
+      .trim();
+    if (leftSide.length >= 4 && leftSide.split(/\s+/).length <= 6 && !isCorruptedToken(leftSide.split(/\s+/)[0])) {
+      return leftSide;
+    }
+  }
+
+  // 2. Check subject noun phrase before a defining verb ("El proceso psicodiagnóstico clínico se inicia...", "La arquitectura incaica destaca...")
+  const subjectMatch = /^(?:El|La|Los|Las|Un|Una)\s+([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:\s+(?:de|del|en|para|por|la|el|los|las)?\s*[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+){0,4}?)\s+(?:es|son|se\s+inicia|constituye|consiste|permite|destaca|alcanz[óo]|fue|fueron|se\s+registra|se\s+genera|funciona|opera|impone|establece|representa|comprende|requiere|incluye|eval[úu]a)/i.exec(
+    sentence.trim()
+  );
+  if (subjectMatch && subjectMatch[1]) {
+    const candidate = subjectMatch[1].trim();
+    const words = candidate.split(/\s+/);
+    if (words.length >= 1 && words.length <= 6 && words.some(w => isValidSpanishStudyWord(w))) {
+      return candidate;
+    }
+  }
+
+  // 3. Look for a 2-3 word technical noun phrase around `fallbackKeyword`
+  if (fallbackKeyword && fallbackKeyword.length >= 4) {
+    const escaped = fallbackKeyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const npRegex = new RegExp(
+      `\\b(${escaped}\\s+(?:de\\s+|del\\s+)?[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}|[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}\\s+${escaped})\\b`,
+      'i'
+    );
+    const m = npRegex.exec(sentence);
+    if (m && m[1]) {
+      const phraseWords = m[1].trim().split(/\s+/);
+      if (phraseWords.every(w => !isCorruptedToken(w)) && phraseWords.filter(w => isValidSpanishStudyWord(w)).length >= 2) {
+        return m[1].trim();
+      }
+    }
+  }
+
+  return fallbackKeyword;
+}
+
+/**
  * Builds a specific thematic title (`topicTitle`) for a sentence using any detected section heading,
- * the document's base topic, and the primary domain keywords in that sentence.
+ * the document's base topic, and the primary domain concepts in that sentence.
  */
 function buildSentenceTopicTitle(
   baseDocTopic: string,
   activeHeading: string | null,
+  conceptPhrase: string,
   sentenceKeywords: string[]
 ): string {
   if (activeHeading && activeHeading.length >= 4) {
     return activeHeading;
   }
+
+  const formattedConcept =
+    conceptPhrase && conceptPhrase.length >= 4
+      ? conceptPhrase.charAt(0).toUpperCase() + conceptPhrase.slice(1)
+      : '';
+
+  if (formattedConcept && !normalizeText(baseDocTopic).includes(normalizeText(formattedConcept))) {
+    return `${baseDocTopic} • ${formattedConcept}`;
+  }
+
   const cleanKw = sentenceKeywords
     .filter(k => isValidSpanishStudyWord(k))
     .map(k => k.charAt(0).toUpperCase() + k.slice(1).toLowerCase());
@@ -372,15 +441,31 @@ function buildSentenceTopicTitle(
 }
 
 /**
- * Extracts meaningful sentences, thematic titles, and keywords strictly from the uploaded documents in the current session.
- * Rejects any corrupted PDF CMap tokens, page number headers, or non-Spanish fragments.
+ * Splits a paragraph into individual complete sentences without breaking on abbreviations like "vs.", "art.", "ej.", "dr.", "cap.", "etc.".
+ */
+function splitParagraphIntoCompleteSentences(paragraph: string): string[] {
+  const protectedText = paragraph
+    .replace(/\b(vs|art|arts|ej|dr|dra|sr|sra|cap|pág|pag|fig|inc|núm|num|etc|aprox|prof)\./gi, '$1__DOT__');
+
+  const rawSentences = protectedText
+    .split(/(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ¿¡"«(0-9])/)
+    .map(s => s.replace(/__DOT__/g, '.').trim())
+    .filter(Boolean);
+
+  return rawSentences;
+}
+
+/**
+ * Extracts meaningful sentences, thematic titles, nominal concept phrases, and keywords strictly from the uploaded documents.
  */
 function extractDocumentKnowledge(docs: UploadedDoc[]): {
   sentences: ExtractedSentence[];
   allKeywords: string[];
+  allConceptPhrases: string[];
 } {
   const sentences: ExtractedSentence[] = [];
   const keywordCounts = new Map<string, { original: string; count: number }>();
+  const conceptPhrasesSet = new Set<string>();
 
   for (const doc of docs) {
     const baseDocTopic = deriveDocumentBaseTopic(doc.name, doc.analysis?.keyThemes);
@@ -412,17 +497,16 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
       if (!trimmedLine) continue;
 
       const possibleHeading = extractHeadingTopic(trimmedLine);
-      if (possibleHeading && trimmedLine.length < 75 && !/[.!?].+[.!?]/.test(trimmedLine)) {
+      if (possibleHeading && trimmedLine.length < 85 && !/[.!?].+[.!?]/.test(trimmedLine)) {
         currentHeading = possibleHeading;
-        // If it's a short standalone title/heading without a full sentence predicate, only use it as the topic heading
-        if (trimmedLine.length < 60 || !/[.!?]$/.test(trimmedLine)) {
+        if (trimmedLine.length < 65 || !/[.!?]$/.test(trimmedLine)) {
           continue;
         }
       }
 
-      const rawChunks = trimmedLine
-        .replace(/^\d+(?:\.\d+)?\s*[.)\-–]\s*/, '')
-        .split(/(?<=[.!?])\s+/)
+      const rawChunks = splitParagraphIntoCompleteSentences(
+        trimmedLine.replace(/^\d+(?:\.\d+)?\s*[.)\-–]\s*/, '')
+      )
         .map(s =>
           s
             .replace(/^[\s•\-*R:;«»]+/, '')
@@ -433,7 +517,8 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
         .filter(s => isCleanStudySentence(s) && s.length >= 35 && s.split(/\s+/).length >= 6);
 
       for (const chunk of rawChunks) {
-        const inlineHeading = extractHeadingTopic(chunk.split(':')[0] || '');
+        const colonPrefix = chunk.includes(':') ? chunk.split(':')[0] || '' : '';
+        const inlineHeading = colonPrefix.length <= 50 ? extractHeadingTopic(colonPrefix) : null;
         const effectiveHeading = inlineHeading || currentHeading;
 
         const matches = chunk.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || [];
@@ -462,11 +547,21 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
           const cleanSentenceText =
             chunk.endsWith('.') || chunk.endsWith('?') || chunk.endsWith('!') ? chunk : `${chunk}.`;
           if (!sentences.some(existing => normalizeText(existing.text) === normalizeText(cleanSentenceText))) {
-            const topicTitle = buildSentenceTopicTitle(baseDocTopic, effectiveHeading, chunkKeywords);
+            const conceptPhrase = extractConceptPhrase(cleanSentenceText, chunkKeywords[0]);
+            if (conceptPhrase && conceptPhrase.length >= 4) {
+              conceptPhrasesSet.add(conceptPhrase);
+            }
+            const topicTitle = buildSentenceTopicTitle(
+              baseDocTopic,
+              effectiveHeading,
+              conceptPhrase,
+              chunkKeywords
+            );
             sentences.push({
               docName: doc.name,
               text: cleanSentenceText,
               keywords: chunkKeywords,
+              conceptPhrase,
               topicTitle,
               sectionLabel: topicTitle,
             });
@@ -486,6 +581,7 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
           !STOPWORDS.has(cleanTheme.toLowerCase()) &&
           !isCorruptedToken(cleanTheme.replace(/\s+/g, ''))
         ) {
+          conceptPhrasesSet.add(cleanTheme);
           const lower = cleanTheme.toLowerCase();
           if (!keywordCounts.has(lower)) {
             keywordCounts.set(lower, { original: cleanTheme, count: 2 });
@@ -494,8 +590,8 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
       }
     }
 
-    // If a document had very little clean text (e.g. a title-only cover or short summary),
-    // synthesize clean academic statements from its sanitized words and filename concepts.
+    // If a document had very little clean text (e.g. a title-only cover or short image without OCR prose),
+    // synthesize clean, complete academic statements from its sanitized words and filename concepts.
     if (sentences.filter(s => s.docName === doc.name).length === 0) {
       const sanitizedRaw = cleanExtractedText(doc.rawText || '');
       const rawValidWords = (sanitizedRaw.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || []).filter(w =>
@@ -518,12 +614,13 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
       }
 
       const primaryTopic = kws[0] || baseDocTopic;
-      const secondaryTopic = kws[1] || kws[0] || 'Análisis';
+      const secondaryTopic = kws[1] || kws[0] || 'Análisis Clínico';
 
       sentences.push({
         docName: doc.name,
-        text: `El eje conceptual principal desarrollado en el material de estudio comprende el análisis de ${primaryTopic} y su articulación práctica con ${secondaryTopic}.`,
+        text: `El eje conceptual desarrollado en el documento aborda el estudio sistemático de ${primaryTopic} y su articulación metodológica con ${secondaryTopic}.`,
         keywords: [primaryTopic, secondaryTopic],
+        conceptPhrase: `${primaryTopic} y ${secondaryTopic}`,
         topicTitle: `${baseDocTopic} • Fundamentos de ${primaryTopic}`,
         sectionLabel: `${baseDocTopic} • Fundamentos de ${primaryTopic}`,
       });
@@ -531,10 +628,11 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
       if (kws.length >= 2) {
         sentences.push({
           docName: doc.name,
-          text: `Dentro del estudio de ${primaryTopic}, el concepto de ${secondaryTopic} constituye un elemento fundamental para la evaluación y comprensión integral del caso.`,
+          text: `Dentro del marco teórico de ${primaryTopic}, la aplicación rigurosa de ${secondaryTopic} permite fundamentar la evaluación e interpretación integral del material.`,
           keywords: [secondaryTopic, primaryTopic],
-          topicTitle: `${baseDocTopic} • Relación con ${secondaryTopic}`,
-          sectionLabel: `${baseDocTopic} • Relación con ${secondaryTopic}`,
+          conceptPhrase: secondaryTopic,
+          topicTitle: `${baseDocTopic} • Articulación con ${secondaryTopic}`,
+          sectionLabel: `${baseDocTopic} • Articulación con ${secondaryTopic}`,
         });
       }
     }
@@ -545,7 +643,9 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
     .sort((a, b) => b.count - a.count || b.original.length - a.original.length)
     .map(k => k.original);
 
-  return { sentences, allKeywords };
+  const allConceptPhrases = Array.from(conceptPhrasesSet);
+
+  return { sentences, allKeywords, allConceptPhrases };
 }
 
 /**
@@ -603,7 +703,7 @@ function splitSentenceAroundKeyword(
 
 /**
  * Builds a plausible, grammatically natural false statement from a true document sentence
- * by substituting a key concept or inverting the core relationship cleanly.
+ * by negating its core finite verb or inverting its main relationship cleanly.
  */
 function buildNaturalFalseStatement(
   sObj: ExtractedSentence,
@@ -611,36 +711,134 @@ function buildNaturalFalseStatement(
   replacementKeyword: string | undefined,
   difficulty: DifficultyLevel
 ): string {
+  // 1. Try natural Spanish verb negation first (produces 100% grammatical sentences without awkward word-splicing)
+  const verbNegations: Array<[RegExp, string]> = [
+    [/\bse inicia con\b/i, 'prescinde por completo de'],
+    [/\bconstituye una\b/i, 'no constituye en ningún caso una'],
+    [/\bconstituye un\b/i, 'no constituye en ningún caso un'],
+    [/\bpermite establecer\b/i, 'impide establecer'],
+    [/\bpermite\b/i, 'impide y descarta'],
+    [/\bconsiste en\b/i, 'excluye expresamente'],
+    [/\balcanz[óo] su m[áa]xima\b/i, 'perdió toda posibilidad de'],
+    [/\bdestaca por el uso de\b/i, 'prohíbe el empleo de'],
+    [/\bfue edificada\b/i, 'nunca fue edificada'],
+    [/\bse registraba mediante\b/i, 'carecía de registro mediante'],
+    [/\beval[úu]a\b/i, 'omite evaluar'],
+    [/\bdebe ejercer\b/i, 'tiene prohibido ejercer'],
+    [/\bdeben verificar\b/i, 'están exentos de verificar'],
+    [/\bimpone la aplicaci[óo]n\b/i, 'rechaza la aplicación'],
+    [/\brequiere codificar\b/i, 'prescinde de codificar'],
+    [/\bse genera a trav[ée]s de\b/i, 'se bloquea e inhibe en'],
+    [/\bfunciona como\b/i, 'Es incapaz de operar como'],
+    [/\bfija\b/i, 'es incapaz de fijar'],
+    [/\bse consume\b/i, 'no se consume ningún'],
+    [/\bse reciclan\b/i, 'jamás se reciclan'],
+    [/\bes el\b/i, 'no representa el'],
+    [/\bes la\b/i, 'no representa la'],
+    [/\bes un\b/i, 'no constituye un'],
+    [/\bes una\b/i, 'no constituye una'],
+    [/\bson\b/i, 'no son'],
+  ];
+
+  for (const [pattern, replacement] of verbNegations) {
+    if (pattern.test(sObj.text)) {
+      const negated = sObj.text.replace(pattern, replacement);
+      if (negated !== sObj.text) {
+        return negated.charAt(0).toUpperCase() + negated.slice(1);
+      }
+    }
+  }
+
+  // 2. If replacement keyword is available and fits cleanly
   if (replacementKeyword && split.sentenceBefore && split.sentenceAfter) {
     const formattedReplacement = matchOptionCase(replacementKeyword, split.targetWord);
     if (difficulty === 'jacqueline' || difficulty === 'dificil') {
-      return `${split.sentenceBefore} exclusivamente ${formattedReplacement}, prescindiendo por completo de ${split.targetWord} ${split.sentenceAfter}`
-        .replace(/\s+/g, ' ')
-        .trim();
+      return `Contrario a lo expuesto sobre ${sObj.conceptPhrase}, el documento sostiene que el proceso descarta «${split.targetWord}» y depende exclusivamente de «${formattedReplacement}».`;
     }
-    return `${split.sentenceBefore} ${formattedReplacement} ${split.sentenceAfter}`
+    return `${split.sentenceBefore} ${formattedReplacement} (en lugar de ${split.targetWord}) ${split.sentenceAfter}`
       .replace(/\s+/g, ' ')
       .trim();
   }
 
-  // If sentence has an affirmative verb ("es", "debe", "permite", "consiste", "requiere", "genera"), negate it naturally
-  const negatedVerb = sObj.text.replace(
-    /\b(es|son|debe|deben|permite|permiten|requiere|requieren|genera|generan|constituye|establece|impone|utiliza|funciona)\b/i,
-    'no $1'
+  return `El documento descarta que ${sObj.text.charAt(0).toLowerCase() + sObj.text.slice(1)}`;
+}
+
+/**
+ * Builds 3 complete, grammatically natural, plausible false statement distractors for a `multiple_choice` question
+ * grounded in the concepts and terminology of the uploaded documents.
+ */
+function buildMultipleChoicePropositionDistractors(
+  sObj: ExtractedSentence,
+  split: { sentenceBefore: string; targetWord: string; sentenceAfter: string },
+  allSentences: ExtractedSentence[],
+  allKeywords: string[],
+  difficulty: DifficultyLevel,
+  seed: number
+): string[] {
+  const distractors: string[] = [];
+  const concept = sObj.conceptPhrase || split.targetWord;
+  const otherKeywords = allKeywords.filter(
+    k =>
+      !isCorruptedToken(k) &&
+      normalizeText(k) !== normalizeText(split.targetWord) &&
+      !normalizeText(concept).includes(normalizeText(k))
   );
-  if (negatedVerb !== sObj.text) {
-    return negatedVerb;
+
+  const kwA = otherKeywords[seed % Math.max(1, otherKeywords.length)] || 'la metodología secundaria';
+  const kwB = otherKeywords[(seed + 1) % Math.max(1, otherKeywords.length)] || 'el criterio auxiliar';
+  const kwC = otherKeywords[(seed + 2) % Math.max(1, otherKeywords.length)] || 'la fase preliminar';
+
+  // Distractor 1: Direct grammatical negation / inversion of the target sentence
+  const falseFromTarget = buildNaturalFalseStatement(sObj, split, kwA, difficulty);
+  if (normalizeText(falseFromTarget) !== normalizeText(sObj.text)) {
+    distractors.push(falseFromTarget);
   }
 
-  return `En ningún caso se considera válido dentro del estudio de ${sObj.topicTitle} que: ${
-    sObj.text.charAt(0).toLowerCase() + sObj.text.slice(1)
-  }`;
+  // Distractor 2: If there is another sentence in the document, negate that sentence or cross-attribute its predicate
+  if (allSentences.length > 1) {
+    const otherSentence = allSentences[(seed + 1) % allSentences.length];
+    if (normalizeText(otherSentence.text) !== normalizeText(sObj.text)) {
+      const otherSplit = splitSentenceAroundKeyword(
+        otherSentence.text,
+        otherSentence.keywords[0] || kwB
+      );
+      const negatedOther = buildNaturalFalseStatement(otherSentence, otherSplit, kwB, difficulty);
+      if (
+        normalizeText(negatedOther) !== normalizeText(sObj.text) &&
+        !distractors.some(d => normalizeText(d) === normalizeText(negatedOther))
+      ) {
+        distractors.push(negatedOther);
+      }
+    }
+  }
+
+  // Distractor 3 & Fallback templates using actual document terminology without repeating words from `concept`
+  const distinctTarget =
+    sObj.keywords.find(k => !normalizeText(concept).includes(normalizeText(k))) || kwA;
+  const candidateTemplates = [
+    `En relación con «${sObj.topicTitle}», el planteamiento sobre «${concept}» descarta la participación de «${distinctTarget}» y se limita a un registro preliminar aislado.`,
+    `Según el apartado «${sObj.topicTitle}», «${concept}» constituye un procedimiento secundario opcional que prescinde del análisis de «${kwB}».`,
+    `El documento sostiene que «${concept}» opera de manera independiente, excluyendo cualquier vinculación técnica o metodológica con «${kwC}».`,
+    `Dentro del estudio de «${sObj.topicTitle}», se establece que «${concept}» carece de relevancia diagnóstica o analítica frente a «${distinctTarget}».`,
+  ];
+
+  for (const cand of candidateTemplates) {
+    if (distractors.length >= 3) break;
+    if (
+      normalizeText(cand) !== normalizeText(sObj.text) &&
+      !distractors.some(d => normalizeText(d) === normalizeText(cand))
+    ) {
+      distractors.push(cand);
+    }
+  }
+
+  return distractors.slice(0, 3);
 }
 
 /**
  * Generates questions 100% exclusively from the active documents passed in `docs`.
- * Never uses unrelated preset questions if those preset documents are not in `docs`.
- * Every generated question includes `topicTitle` (Título de la Temática) and adapts to all 4 difficulties & 4 modalities.
+ * Every generated question includes `topicTitle` (Título de la Temática) and complete, logical questions and answers
+ * across all 4 difficulties (Fácil, Medio, Difícil, Jacqueline) and all 4 modalities.
  */
 export function generateFallbackQuestions(
   docs: UploadedDoc[],
@@ -884,69 +1082,33 @@ export function generateFallbackQuestions(
 
     const split = splitSentenceAroundKeyword(sObj.text, primaryKeyword);
     const topicTitle = sObj.topicTitle || deriveDocumentBaseTopic(sObj.docName);
+    const conceptLabel = sObj.conceptPhrase || split.targetWord;
 
     if (modality === 'multiple_choice') {
-      // Build 3 clean distractors strictly from valid concepts in the uploaded documents
-      const normSentence = normalizeText(sObj.text);
-      const cleanKeywordsPool = allKeywords.filter(k => !isCorruptedToken(k));
-      const otherKeywords = cleanKeywordsPool.filter(
-        k =>
-          normalizeText(k) !== normalizeText(split.targetWord) &&
-          !normSentence.includes(normalizeText(k))
+      // Build 3 complete, coherent, grammatically natural proposition distractors
+      // so the student evaluates full conceptual statements from the document!
+      const correctProposition = sObj.text;
+      const distractors = buildMultipleChoicePropositionDistractors(
+        sObj,
+        split,
+        sentences,
+        allKeywords,
+        difficulty,
+        i + 1
       );
-      const fallbackSameDocKeywords = cleanKeywordsPool.filter(
-        k => normalizeText(k) !== normalizeText(split.targetWord)
-      );
-      const poolForDistractors =
-        otherKeywords.length >= 3 ? otherKeywords : [...otherKeywords, ...fallbackSameDocKeywords];
 
-      const distractors: string[] = [];
-      for (let dIdx = 0; dIdx < poolForDistractors.length && distractors.length < 3; dIdx++) {
-        const candidate = poolForDistractors[(i + dIdx * 2) % poolForDistractors.length];
-        if (
-          candidate &&
-          !isCorruptedToken(candidate) &&
-          normalizeText(candidate) !== normalizeText(split.targetWord) &&
-          !distractors.some(existing => normalizeText(existing) === normalizeText(candidate))
-        ) {
-          distractors.push(matchOptionCase(candidate, split.targetWord));
-        }
-      }
-
-      const academicFallbackConcepts = [
-        'sistematización',
-        'metodología',
-        'interpretación',
-        'estructuración',
-        'clasificación',
-        'fundamentación',
-      ];
-      let fIdx = 0;
-      while (distractors.length < 3) {
-        const fallbackConcept = matchOptionCase(
-          academicFallbackConcepts[(i + fIdx++) % academicFallbackConcepts.length],
-          split.targetWord
-        );
-        if (
-          normalizeText(fallbackConcept) !== normalizeText(split.targetWord) &&
-          !distractors.some(existing => normalizeText(existing) === normalizeText(fallbackConcept))
-        ) {
-          distractors.push(fallbackConcept);
-        }
-      }
-
-      const rawOptions = [split.targetWord, ...distractors.slice(0, 3)];
+      const rawOptions = [correctProposition, ...distractors];
       const options = rotateOptions(rawOptions, i + 1);
 
       let mcPrompt = '';
       if (difficulty === 'jacqueline') {
-        mcPrompt = `Dentro del análisis de «${topicTitle}» en "${sObj.docName}", ¿qué término técnico o concepto específico fundamenta con exactitud el siguiente postulado del documento: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`;
+        mcPrompt = `Dentro del análisis técnico de «${topicTitle}» desarrollado en "${sObj.docName}", ¿cuál de los siguientes postulados fundamenta con exactitud lo establecido en el documento acerca de «${conceptLabel}»?`;
       } else if (difficulty === 'dificil') {
-        mcPrompt = `Al examinar la sección sobre «${topicTitle}» en "${sObj.docName}", ¿cuál de los siguientes conceptos articula de forma precisa el planteamiento: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`;
+        mcPrompt = `Al analizar el apartado sobre «${topicTitle}» en "${sObj.docName}", ¿cuál de las siguientes proposiciones explica con precisión el alcance y función de «${conceptLabel}»?`;
       } else if (difficulty === 'medio') {
-        mcPrompt = `En relación con «${topicTitle}» según el documento "${sObj.docName}", ¿qué concepto completa coherentemente el enunciado: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`;
+        mcPrompt = `De acuerdo con el desarrollo de «${topicTitle}» en el documento "${sObj.docName}", ¿qué afirmación describe correctamente la relación conceptual de «${conceptLabel}»?`;
       } else {
-        mcPrompt = `De acuerdo con el tema «${topicTitle}» en "${sObj.docName}", selecciona el concepto directo que completa la afirmación: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»`;
+        mcPrompt = `Según la sección «${topicTitle}» del documento "${sObj.docName}", selecciona el enunciado correcto respecto a «${conceptLabel}»:`;
       }
 
       dynamicPool.push({
@@ -956,9 +1118,9 @@ export function generateFallbackQuestions(
         topicTitle,
         prompt: mcPrompt,
         options,
-        correctAnswer: split.targetWord,
-        officialAnswer: `En "${sObj.docName}" (${topicTitle}) se establece: «${sObj.text}»`,
-        explanation: `Concepto clave («${split.targetWord}») verificado en "${sObj.docName}" bajo la temática "${topicTitle}": «${sObj.text}»`,
+        correctAnswer: correctProposition,
+        officialAnswer: `En "${sObj.docName}" (${topicTitle}) se establece literalmente: «${sObj.text}»`,
+        explanation: `Postulado verificado en el documento "${sObj.docName}" dentro del tema «${topicTitle}»: «${sObj.text}»`,
         sourceDocName: sObj.docName,
         sourceSection: topicTitle,
       });
@@ -1020,7 +1182,7 @@ export function generateFallbackQuestions(
           sentenceAfter: split.sentenceAfter || `como elemento clave en ${sObj.docName}.`,
         },
         correctAnswer: split.targetWord,
-        officialAnswer: `Concepto exacto: "${split.targetWord}". Enunciado original en "${sObj.docName}" (${topicTitle}): «${sObj.text}»`,
+        officialAnswer: `Concepto exacto: "${split.targetWord}". Enunciado completo en "${sObj.docName}" (${topicTitle}): «${sObj.text}»`,
         explanation: `Cita directa del apartado "${topicTitle}" en "${sObj.docName}": «${sObj.text}»`,
         sourceDocName: sObj.docName,
         sourceSection: topicTitle,
@@ -1037,14 +1199,14 @@ export function generateFallbackQuestions(
       if (difficulty === 'jacqueline') {
         openPrompt =
           normalizeText(primaryKeyword) !== normalizeText(secondaryKeyword)
-            ? `Respecto a la temática «${topicTitle}» en "${sObj.docName}", fundamenta con precisión técnica cómo se articula el concepto de «${split.targetWord}» con «${secondaryKeyword}» y cuáles son sus implicaciones según el documento.`
-            : `Respecto a la temática «${topicTitle}» en "${sObj.docName}", desarrolla exhaustivamente los fundamentos y alcances técnicos de «${split.targetWord}» expuestos en el texto.`;
+            ? `Respecto a la temática «${topicTitle}» en "${sObj.docName}", fundamenta con precisión técnica cómo se articula «${conceptLabel}» con «${secondaryKeyword}» y cuáles son sus implicaciones según el documento.`
+            : `Respecto a la temática «${topicTitle}» en "${sObj.docName}", desarrolla exhaustivamente los fundamentos y alcances técnicos de «${conceptLabel}» expuestos en el texto.`;
       } else if (difficulty === 'dificil') {
-        openPrompt = `Analiza en profundidad lo expuesto en "${sObj.docName}" sobre la temática «${topicTitle}»: ¿qué papel cumple «${split.targetWord}» y cómo se justifica dentro del planteamiento del autor?`;
+        openPrompt = `Analiza en profundidad lo expuesto en "${sObj.docName}" sobre la temática «${topicTitle}»: ¿qué función cumple «${conceptLabel}» y cómo se justifica dentro del planteamiento del documento?`;
       } else if (difficulty === 'medio') {
-        openPrompt = `De acuerdo con el documento "${sObj.docName}" en el apartado «${topicTitle}», explica en qué consiste «${split.targetWord}» y cómo se relaciona con las ideas principales de esa sección.`;
+        openPrompt = `De acuerdo con el documento "${sObj.docName}" en el apartado «${topicTitle}», explica en qué consiste «${conceptLabel}» y cómo se relaciona con las ideas principales de esa sección.`;
       } else {
-        openPrompt = `Según el documento "${sObj.docName}" dentro del tema «${topicTitle}», describe qué se establece directamente acerca de «${split.targetWord}».`;
+        openPrompt = `Según el documento "${sObj.docName}" dentro del tema «${topicTitle}», describe qué se establece directamente acerca de «${conceptLabel}».`;
       }
 
       dynamicPool.push({
@@ -1113,7 +1275,6 @@ export function sanitizeAndValidateQuestions(
     if (!raw || typeof raw !== 'object') continue;
 
     const rawPrompt = cleanExtractedText(String(raw.prompt || '')).trim();
-    // Reject if prompt is empty or still contains unrepairable CMap garbage
     const promptWords = rawPrompt.split(/\s+/).filter(Boolean);
     const corruptedInPrompt = promptWords.filter(w => isCorruptedToken(w)).length;
     if (!rawPrompt || promptWords.length < 4 || corruptedInPrompt / promptWords.length > 0.15) {
@@ -1180,7 +1341,11 @@ export function sanitizeAndValidateQuestions(
         : [];
 
       const cleanCorrect = cleanExtractedText(String(raw.correctAnswer || rawOpts[0] || '')).trim();
-      if (!cleanCorrect || isCorruptedToken(cleanCorrect) || rawOpts.length < 2) {
+      if (
+        !cleanCorrect ||
+        cleanCorrect.split(/\s+/).some((w: string) => isCorruptedToken(w)) ||
+        rawOpts.length < 2
+      ) {
         if (fallbackPool[i]) validated.push(fallbackPool[i]);
         continue;
       }
@@ -1190,7 +1355,7 @@ export function sanitizeAndValidateQuestions(
         finalOpts[0] = cleanCorrect;
       }
       while (finalOpts.length < 4) {
-        const extra = `Análisis complementario de ${topicTitle} (${finalOpts.length + 1})`;
+        const extra = `Interpretación alternativa no contemplada en el apartado «${topicTitle}» (${finalOpts.length + 1})`;
         if (!finalOpts.includes(extra)) finalOpts.push(extra);
       }
 
@@ -1212,7 +1377,7 @@ export function sanitizeAndValidateQuestions(
       const targetWord = cleanExtractedText(
         String(raw.fillInContext?.targetWord || raw.correctAnswer || '')
       ).trim();
-      if (!targetWord || isCorruptedToken(targetWord)) {
+      if (!targetWord || targetWord.split(/\s+/).some(w => isCorruptedToken(w))) {
         if (fallbackPool[i]) validated.push(fallbackPool[i]);
         continue;
       }
@@ -1272,4 +1437,3 @@ export function sanitizeAndValidateQuestions(
 
   return validated.slice(0, config.questionCount);
 }
-

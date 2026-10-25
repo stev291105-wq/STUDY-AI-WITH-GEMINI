@@ -435,4 +435,48 @@ test('sanitizeAndValidateQuestions replaces corrupted AI questions in IA del ent
   }
 });
 
+test('Multi-line wrapped PDF sentences and valid Spanish 4-consonant words are preserved intact without mid-word truncation', () => {
+  const wrappedPdfText = `1. Encuadre Clínico y Entrevista Inicial
+El proceso psicodiagnóstico clínico se inicia con la entrevista semidirigida para evaluar la demanda del
+paciente y establecer la construcción del encuadre terapéutico como instrumento de perspectiva clínica.`;
+
+  const cleaned = cleanExtractedText(wrappedPdfText);
+  // Must preserve "construcción", "instrumento", "perspectiva" and join the wrapped line into a single complete sentence
+  assert.ok(cleaned.includes('demanda del paciente y establecer la construcción del encuadre terapéutico como instrumento de perspectiva clínica.'));
+
+  const doc: UploadedDoc = {
+    id: 'doc-wrapped-pdf',
+    name: 'Resumen_Psicodiagnostico_y_Entrevista.pdf',
+    size: 32000,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: wrappedPdfText,
+    status: 'ready',
+  };
+  doc.analysis = buildLocalDocAnalysis(doc);
+
+  const questions = generateFallbackQuestions([doc], {
+    selectedModalities: ['multiple_choice', 'true_false', 'fill_blank', 'open_question'],
+    difficulty: 'jacqueline',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+
+  assert.equal(questions.length, 4);
+  for (const q of questions) {
+    assert.ok(!q.prompt.includes('demanda del pa.'), `Sentence was truncated mid-word: ${q.prompt}`);
+    assert.ok(q.topicTitle?.includes('Encuadre Clínico y Entrevista Inicial'), `Expected heading topicTitle, got: ${q.topicTitle}`);
+    if (q.type === 'multiple_choice') {
+      assert.equal(q.options?.length, 4);
+      // Every option in multiple_choice must be a complete conceptual statement (>= 4 words), never a single isolated verb like "Establecer"
+      for (const opt of q.options || []) {
+        assert.ok(opt.split(/\s+/).length >= 4, `Expected full proposition option in multiple_choice, got: "${opt}"`);
+      }
+    }
+  }
+});
+
+
 

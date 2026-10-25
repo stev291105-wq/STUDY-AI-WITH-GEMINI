@@ -288,15 +288,33 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
         )}
 
         {activeTab === 'no_ai' && (
-          <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 space-y-2 text-xs text-emerald-900 dark:text-emerald-200">
-            <div className="flex items-center gap-2 font-bold text-sm text-emerald-800 dark:text-emerald-300">
-              <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              <span>Modo Estudio Sin IA Activo</span>
+          <div className="p-4 rounded-2xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800/70 space-y-2.5 text-xs text-amber-950 dark:text-amber-100">
+            <div className="flex items-center gap-2 font-bold text-sm text-amber-900 dark:text-amber-200">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Recomendación para Modo Estudio Sin IA (Demo sin IA)</span>
             </div>
             <p className="leading-relaxed">
-              En este modo, StudyMaster AI utiliza su motor heurístico local de procesamiento de documentos y generación algorítmica de preguntas.
-              Es ideal si deseas practicar de forma ilimitada, completamente privada y sin consumir tokens ni depender de conectividad a modelos de lenguaje externos.
+              Esta versión <strong>Demo Sin IA</strong> es más simple y utiliza un motor heurístico local sin conexión externa. Para que funcione mejor, te recomendamos cargar documentos <strong>Word (.docx), archivos PDF o archivos de texto (.txt, .md)</strong>.
             </p>
+            <p className="leading-relaxed">
+              Si buscas <strong>mejores resultados, preguntas más avanzadas y un mejor análisis</strong> de tus materiales (incluyendo imágenes y manuscritos), te recomendamos <strong>iniciar sesión con Gemini</strong>. De todas maneras, puedes seguir en este modo si lo deseas pulsando "Guardar y Aplicar Modo".
+            </p>
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('gemini_visitor');
+                  if (!visitorState?.isConnected && onOpenVisitorModal) {
+                    onClose();
+                    onOpenVisitorModal();
+                  }
+                }}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white inline-flex items-center gap-1.5 shadow-xs transition-all"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Cambiar e iniciar sesión con Gemini</span>
+              </button>
+            </div>
           </div>
         )}
 

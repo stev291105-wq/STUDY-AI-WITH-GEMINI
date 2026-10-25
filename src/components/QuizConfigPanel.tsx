@@ -43,6 +43,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
   onOpenEngineModal,
 }) => {
   const [showMoreOptions, setShowMoreOptions] = useState(false);
+  const [acknowledgedNoAiNotice, setAcknowledgedNoAiNotice] = useState(false);
   const { selectedModalities, difficulty, questionCount, engineMode, customConfig } = config;
 
   // Modalities metadata
@@ -225,7 +226,11 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
             {/* Option 2: Modo Estudio Sin IA */}
             <button
               type="button"
-              onClick={() => setConfig(prev => ({ ...prev, engineMode: 'no_ai' }))}
+              data-testid="select-no-ai-mode"
+              onClick={() => {
+                setAcknowledgedNoAiNotice(false);
+                setConfig(prev => ({ ...prev, engineMode: 'no_ai' }));
+              }}
               className={`p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
                 engineMode === 'no_ai'
                   ? 'border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/70 text-emerald-950 dark:text-emerald-100 ring-2 ring-emerald-500/20 shadow-xs'
@@ -234,7 +239,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
             >
               <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-700 dark:text-emerald-400">
                 <BookOpen className="w-4 h-4 text-emerald-600" />
-                <span>Modo Estudio Sin IA</span>
+                <span>Modo Estudio Sin IA (Demo)</span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
                 100% local, autónomo y privado. No requiere conexión a IA ni API keys.
@@ -250,6 +255,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
             {/* Option 3: IA del entorno del creador */}
             <button
               type="button"
+              data-testid="select-creator-ai-mode"
               onClick={() => setConfig(prev => ({ ...prev, engineMode: 'gemini_env' }))}
               className={`p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
                 engineMode === 'gemini_env'
@@ -272,6 +278,63 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
               </div>
             </button>
           </div>
+
+          {/* Recommendation Message Banner when Modo Estudio Sin IA (Demo sin IA) is selected */}
+          {engineMode === 'no_ai' && (
+            <div
+              data-testid="no-ai-recommendation-banner"
+              className="mt-3 p-4 rounded-xl bg-amber-50/90 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700/80 text-amber-950 dark:text-amber-100 space-y-3 shadow-xs transition-all"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-300 flex items-center justify-center shrink-0 mt-0.5 font-bold text-sm">
+                  💡
+                </div>
+                <div className="space-y-1.5 text-xs leading-relaxed">
+                  <h4 className="font-extrabold text-amber-900 dark:text-amber-200 text-xs sm:text-sm">
+                    Recomendación de uso para la versión Demo Sin IA
+                  </h4>
+                  <p className="text-amber-900/90 dark:text-amber-100/90">
+                    Esta versión <strong>Demo Sin IA</strong> utiliza un motor heurístico local más simple. Para que funcione de la mejor manera, es recomendable utilizar <strong>documentos Word (.docx), archivos PDF o archivos de texto (.txt, .md)</strong>.
+                  </p>
+                  <p className="text-amber-900/90 dark:text-amber-100/90">
+                    Si deseas <strong>mejores resultados, preguntas más profundas y un mejor análisis multimodal</strong> (especialmente para imágenes, esquemas o apuntes a mano), te recomendamos <strong>iniciar sesión con Gemini</strong>. De todas maneras, puedes seguir en este modo sin problema si así lo deseas.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2.5 pt-1 border-t border-amber-200/80 dark:border-amber-800/60">
+                <button
+                  type="button"
+                  data-testid="continue-no-ai-button"
+                  onClick={() => setAcknowledgedNoAiNotice(true)}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                    acknowledgedNoAiNotice
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/50'
+                  }`}
+                >
+                  {acknowledgedNoAiNotice
+                    ? '✓ Continuando en Modo Demo Sin IA'
+                    : 'Seguir en Modo Demo Sin IA'}
+                </button>
+
+                <button
+                  type="button"
+                  data-testid="switch-to-gemini-from-banner"
+                  onClick={() => {
+                    setConfig(prev => ({ ...prev, engineMode: 'gemini_visitor' }));
+                    if (!visitorState?.isConnected && onOpenVisitorModal) {
+                      onOpenVisitorModal();
+                    }
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Iniciar sesión con Gemini (Recomendado)</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Más Opciones Button & Collapsible */}
           <div className="pt-1">
