@@ -5,7 +5,6 @@ import {
   Image as ImageIcon,
   CheckCircle2,
   Trash2,
-  Sparkles,
   Eye,
   PenTool,
   Cpu,
@@ -14,7 +13,6 @@ import {
   Edit3
 } from 'lucide-react';
 import { UploadedDoc } from '../types';
-import { PRESET_SAMPLE_DOCUMENTS } from '../utils/quizEngine';
 import { extractTextFromFile, buildLocalDocAnalysis } from '../utils/documentParser';
 
 interface DocIngestionProps {
@@ -164,14 +162,6 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
     }
   };
 
-  const handleLoadSamples = () => {
-    setDocuments(prev => {
-      const existingNames = new Set(prev.map(d => d.name));
-      const freshSamples = PRESET_SAMPLE_DOCUMENTS.filter(s => !existingNames.has(s.name));
-      return [...prev, ...freshSamples];
-    });
-  };
-
   const handleRemoveDoc = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setDocuments(prev => prev.filter(d => d.id !== id));
@@ -210,8 +200,6 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
     }
   };
 
-  const hasPresetDocsOnly = documents.length > 0 && documents.every(d => d.id.startsWith('sample-doc-'));
-
   return (
     <div className="space-y-6">
       {/* Header and Callout */}
@@ -222,20 +210,11 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
             1. Ingesta de Documentos & OCR Multimodal
           </h2>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            Sube tus documentos de estudio. Las preguntas en <strong>todos los modos (con o sin IA)</strong> se generarán <strong>exclusivamente</strong> de los archivos activos en esta lista.
+            Sube tus documentos o imágenes de estudio. Las preguntas en <strong>todos los modos (con o sin IA)</strong> se generarán <strong>exclusivamente</strong> de los archivos que subas aquí.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleLoadSamples}
-            type="button"
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/70 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shadow-sm transition-colors"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            Cargar 4 ejemplos reales
-          </button>
-
           {documents.length > 0 && (
             <button
               onClick={handleClearAll}
@@ -244,7 +223,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
               title="Borrar todos los documentos"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Limpiar
+              Limpiar lista
             </button>
           )}
         </div>
@@ -282,7 +261,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
               Arrastra y suelta tus archivos aquí, o <span className="text-indigo-600 dark:text-indigo-400 underline">haz clic para explorar</span>
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-              Al subir tu propio documento, los documentos de ejemplo se reemplazan automáticamente para que estudies únicamente tu material (.pdf, .docx, .pptx, .txt, .md, imágenes).
+              Soporta documentos PDF digitales o escaneados, Word (.docx), PowerPoint (.pptx), apuntes de texto (.txt, .md) e imágenes con reconocimiento óptico de texto (OCR).
             </p>
             {extractingStatus && (
               <div className="mt-3 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm animate-pulse">
@@ -303,7 +282,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
               <PenTool className="w-3 h-3" /> HTR Manuscrito
             </span>
             <span className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-amber-100/80 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 flex items-center gap-1 font-semibold">
-              <Cpu className="w-3 h-3" /> OCR Gráficos
+              <Cpu className="w-3 h-3" /> OCR Imágenes y Escaneos
             </span>
           </div>
         </div>
@@ -314,12 +293,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
             <span>
-              DOCUMENTOS ACTIVOS PARA ESTA SESIÓN ({documents.length}){' '}
-              {hasPresetDocsOnly && (
-                <span className="text-amber-600 dark:text-amber-400 font-normal">
-                  (Ejemplos de demostración — sube tu propio archivo para reemplazarlos)
-                </span>
-              )}
+              DOCUMENTOS ACTIVOS PARA ESTA SESIÓN ({documents.length})
             </span>
             <span>Haz clic en un documento para ver o editar su texto extraído</span>
           </div>

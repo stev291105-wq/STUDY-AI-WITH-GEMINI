@@ -7,11 +7,12 @@ import {
   assessSemanticSimilarity,
   calculateQuizSummary,
   generateFallbackQuestions,
+  sanitizeAndValidateQuestions,
   PRESET_SAMPLE_DOCUMENTS,
 } from './quizEngine';
 import { buildLocalDocAnalysis, isBinaryGarbage, cleanExtractedText } from './documentParser';
 import { selectBestFlashModelFromList } from '../services/geminiClient';
-import { QuestionModality, Question, UserAnswer, QuizConfig, UploadedDoc } from '../types';
+import { QuestionModality, Question, UserAnswer, QuizConfig, UploadedDoc, DifficultyLevel } from '../types';
 
 test('Modality Selector: Enforces maximum of 3 modalities rule and minimum of 1', () => {
   let selected: QuestionModality[] = ['multiple_choice'];
@@ -331,7 +332,107 @@ test('Modo Estudio Sin IA: Even if a PDF only had a corrupted header line, synth
     assert.ok(!q.prompt.includes('ageA'), `Prompt must be clean: ${q.prompt}`);
     assert.ok(!q.prompt.includes('AofA'), `Prompt must be clean: ${q.prompt}`);
     assert.ok(q.prompt.includes('Psicodiagnóstico') || q.prompt.includes('Entrevista'));
+    assert.ok(q.topicTitle && q.topicTitle.length > 3, `Expected topicTitle on question, got: ${q.topicTitle}`);
     assert.equal(q.options?.length, 4);
   }
 });
+
+test('Subset font cipher repair fixes esumenApaMaAelAoMal and sicodiagnósticoAyAEntM eNista', () => {
+  const rawCorrupted = 'esumenApaMaAelAoMal sicodiagnósticoAyAEntM eNista P ageA 1 AofA C5';
+  const repaired = cleanExtractedText(rawCorrupted);
+  assert.ok(!repaired.includes('esumenApaMaAelAoMal'), `Should repair esumenApaMaAelAoMal, got: ${repaired}`);
+  assert.ok(!repaired.includes('sicodiagnósticoAyAEntM'), `Should repair sicodiagnósticoAyAEntM, got: ${repaired}`);
+});
+
+test('All 4 difficulties and all 4 modalities produce coherent questions with topicTitle', () => {
+  const difficulties: DifficultyLevel[] = ['facil', 'medio', 'dificil', 'jacqueline'];
+  const modalities: QuestionModality[] = ['multiple_choice', 'true_false', 'fill_blank', 'open_question'];
+
+  const customDoc: UploadedDoc = {
+    id: 'doc-psicodiagnostico-completo',
+    name: 'Resumen para el oral Psicodiagnóstico y Entrevista.pdf',
+    size: 38400,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: `1. Encuadre y Entrevista Inicial
+El proceso psicodiagnóstico clínico se inicia con la entrevista semidirigida, cuyo objetivo principal es comprender la demanda del sujeto y establecer el encuadre de trabajo.
+2. Mecanismos de Defensa y Transferencia
+Durante la administración de técnicas proyectivas y psicométricas, el profesional evalúa la fortaleza yoica, los mecanismos de defensa predominantes y la modalidad vincular transferencial.
+3. Informe Psicológico y Devolución Diagnóstica
+La entrevista de devolución oral consiste en comunicar al examinado una síntesis integrada de sus recursos adaptativos y áreas de conflicto, adaptando el lenguaje técnico al nivel de comprensión del paciente.`,
+    status: 'ready',
+  };
+  customDoc.analysis = buildLocalDocAnalysis(customDoc);
+
+  for (const difficulty of difficulties) {
+    for (const modality of modalities) {
+      const config: QuizConfig = {
+        selectedModalities: [modality],
+        difficulty,
+        questionCount: 3,
+        includeDocCrossAnalysis: true,
+        engineMode: 'no_ai',
+      };
+
+      const questions = generateFallbackQuestions([customDoc], config);
+      assert.equal(questions.length, 3, `Expected 3 questions for ${difficulty} / ${modality}`);
+
+      for (const q of questions) {
+        assert.equal(q.type, modality);
+        assert.equal(q.difficulty, difficulty);
+        assert.ok(q.topicTitle && q.topicTitle.trim().length >= 4, `Missing topicTitle for ${difficulty}/${modality}`);
+        assert.ok(!q.topicTitle.includes('Fragmento #'), `topicTitle should not be Fragmento #: ${q.topicTitle}`);
+        assert.ok(q.prompt.length > 25, `Prompt too short: ${q.prompt}`);
+        assert.ok(q.correctAnswer.length >= 2, `Missing correctAnswer: ${q.correctAnswer}`);
+        assert.ok(q.officialAnswer.length >= 10, `Missing officialAnswer: ${q.officialAnswer}`);
+      }
+    }
+  }
+});
+
+test('sanitizeAndValidateQuestions replaces corrupted AI questions in IA del entorno del creador mode', () => {
+  const doc: UploadedDoc = {
+    id: 'doc-creator-env',
+    name: 'Resumen para el oral Psicodiagnóstico y Entrevista (1).pdf',
+    size: 25000,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: 'El psicodiagnóstico clínico articula la entrevista inicial, la batería de tests proyectivos y la devolución diagnóstica final.',
+    status: 'ready',
+  };
+  doc.analysis = buildLocalDocAnalysis(doc);
+
+  const config: QuizConfig = {
+    selectedModalities: ['multiple_choice'],
+    difficulty: 'medio',
+    questionCount: 2,
+    includeDocCrossAnalysis: true,
+    engineMode: 'gemini_env',
+  };
+
+  const badAiQuestions: Question[] = [
+    {
+      id: 'bad-ai-1',
+      type: 'multiple_choice',
+      difficulty: 'medio',
+      prompt: 'Según el documento, ¿qué término completa el enunciado: «R [ _____ ] :AP sicodiagnósticoAyAEntM eNista P ageA 1 AofA C5.»?',
+      options: ['sicodiagnósticoAyAEntM', 'ageA', 'esumenApaMaAelAoMal', 'Ninguno de los conceptos citados'],
+      correctAnswer: 'sicodiagnósticoAyAEntM',
+      officialAnswer: 'R :AP sicodiagnósticoAyAEntM eNista P ageA 1 AofA C5.',
+      explanation: 'Cita textual.',
+      sourceDocName: doc.name,
+    },
+  ];
+
+  const validated = sanitizeAndValidateQuestions(badAiQuestions, [doc], config);
+  assert.equal(validated.length, 2);
+  for (const q of validated) {
+    assert.ok(!q.prompt.includes('sicodiagnósticoAyAEntM'), `Sanitized prompt still corrupted: ${q.prompt}`);
+    assert.ok(!q.prompt.includes('esumenApaMaAelAoMal'), `Sanitized prompt still corrupted: ${q.prompt}`);
+    assert.ok(q.topicTitle && q.topicTitle.length > 3, `Sanitized question must have topicTitle: ${q.topicTitle}`);
+  }
+});
+
 

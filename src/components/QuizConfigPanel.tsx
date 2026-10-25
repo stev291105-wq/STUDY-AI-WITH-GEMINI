@@ -26,7 +26,7 @@ interface QuizConfigPanelProps {
   documents: UploadedDoc[];
   onStartQuiz: () => void;
   isGenerating: boolean;
-  onLoadPresets: () => void;
+  onLoadPresets?: () => void;
   visitorState?: VisitorGeminiState;
   onOpenVisitorModal?: () => void;
   onOpenEngineModal?: () => void;
@@ -38,7 +38,6 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
   documents,
   onStartQuiz,
   isGenerating,
-  onLoadPresets,
   visitorState,
   onOpenVisitorModal,
   onOpenEngineModal,
@@ -549,31 +548,21 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
       <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="text-xs text-slate-500 dark:text-slate-400">
           {documents.length === 0 ? (
-            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1 font-semibold">
-              <Zap className="w-4 h-4" /> No has subido documentos aún. Puedes cargar los 4 ejemplos de prueba con 1 clic.
+            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-semibold">
+              <Zap className="w-4 h-4 shrink-0" /> Sube al menos 1 documento o imagen en la sección superior para habilitar el inicio del cuestionario.
             </span>
           ) : (
             <span>
-              Generando test a partir de <strong>{documents.length} documento{documents.length === 1 ? '' : 's'}</strong> cargados.
+              Generando test exclusivamente a partir de <strong>{documents.length} documento{documents.length === 1 ? '' : 's'}</strong> subido{documents.length === 1 ? '' : 's'}.
             </span>
           )}
         </div>
 
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          {documents.length === 0 && (
-            <button
-              type="button"
-              onClick={onLoadPresets}
-              className="w-full sm:w-auto px-4 py-3 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 transition-colors"
-            >
-              Cargar ejemplos
-            </button>
-          )}
-
           <button
             type="button"
             onClick={onStartQuiz}
-            disabled={isGenerating || selectedModalities.length === 0}
+            disabled={isGenerating || selectedModalities.length === 0 || documents.length === 0}
             className={`w-full sm:w-auto px-7 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-md ${
               difficulty === 'jacqueline'
                 ? 'bg-gradient-to-r from-red-600 via-amber-600 to-red-600 text-white shadow-red-500/30 hover:scale-[1.02] active:scale-[0.98]'

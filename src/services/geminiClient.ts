@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { UploadedDoc, QuizConfig, Question } from '../types';
-import { generateFallbackQuestions } from '../utils/quizEngine';
+import { generateFallbackQuestions, sanitizeAndValidateQuestions } from '../utils/quizEngine';
+import { cleanExtractedText } from '../utils/documentParser';
 
 const VISITOR_KEY_STORAGE = 'studymaster_visitor_gemini_key';
 const VISITOR_MODEL_STORAGE = 'studymaster_visitor_gemini_model';
@@ -315,22 +316,23 @@ export async function analyzeVisitorDocWithGemini(
     });
   }
 
+  const cleanedPriorText = cleanExtractedText(doc.rawText || '');
   const promptText = `Eres un experto en EdTech y Visión por Computadora multimodal con OCR y HTR (Handwritten Text Recognition).
 Analiza este documento ("${doc.name}") de estudio. Extrae con precisión todo su contenido real:
-1. Texto digital nativo, conceptos, datos y fórmulas.
+1. Texto digital nativo, conceptos, títulos temáticos, datos y fórmulas.
 2. Reconocimiento de texto escrito a mano (HTR) de pizarras, cuadernos o notas al margen.
-3. Texto y relaciones dentro de diagramas, infografías (Canva/PPTX) o gráficos.
+3. Texto y relaciones dentro de diagramas, infografías (Canva/PPTX) o gráficos, e imágenes incrustadas en el documento.
 Responde estrictamente en formato JSON con la siguiente estructura:
 {
   "summary": "Resumen conciso en español de los puntos clave reales del documento",
-  "keyThemes": ["Concepto 1", "Concepto 2", "Concepto 3", "Concepto 4"],
+  "keyThemes": ["Tema o Concepto 1", "Tema o Concepto 2", "Tema o Concepto 3", "Tema o Concepto 4"],
   "hasHandwriting": true o false,
   "handwrittenNotes": ["Anotación manuscrita detectada 1", ...],
   "diagramDescriptions": ["Descripción de esquemas o diagramas detectados", ...],
   "multimodalNotes": "Observación sobre el análisis OCR/HTR visual",
-  "extractedText": "Transcripción completa y detallada de todo el texto e información del documento"
+  "extractedText": "Transcripción limpia, completa y estructurada por temas de todo el texto e información del documento"
 }
-Texto extraído previamente del archivo: ${doc.rawText ? doc.rawText.slice(0, 8000) : 'Extraer desde el archivo adjunto'}`;
+Texto extraído previamente del archivo: ${cleanedPriorText ? cleanedPriorText.slice(0, 8000) : 'Extraer directamente desde el archivo adjunto'}`;
 
   parts.push({ text: promptText });
 
@@ -341,16 +343,16 @@ Texto extraído previamente del archivo: ${doc.rawText ? doc.rawText.slice(0, 80
   }));
 
   const parsed = JSON.parse(response.text?.trim() || '{}');
-  const extractedText = parsed.extractedText || doc.rawText || '';
+  const extractedText = cleanExtractedText(parsed.extractedText || cleanedPriorText || '');
 
   return {
     extractedText,
     analysis: {
-      summary: parsed.summary || 'Documento analizado con éxito desde tu cuenta de Google.',
-      keyThemes: parsed.keyThemes || ['Conceptos clave'],
+      summary: cleanExtractedText(parsed.summary || '') || 'Documento analizado con éxito desde tu cuenta de Google.',
+      keyThemes: Array.isArray(parsed.keyThemes) ? parsed.keyThemes.map((t: string) => cleanExtractedText(t)).filter(Boolean) : ['Conceptos clave'],
       hasHandwriting: Boolean(parsed.hasHandwriting),
-      handwrittenNotes: parsed.handwrittenNotes || [],
-      diagramDescriptions: parsed.diagramDescriptions || [],
+      handwrittenNotes: Array.isArray(parsed.handwrittenNotes) ? parsed.handwrittenNotes.map((n: string) => cleanExtractedText(n)).filter(Boolean) : [],
+      diagramDescriptions: Array.isArray(parsed.diagramDescriptions) ? parsed.diagramDescriptions.map((d: string) => cleanExtractedText(d)).filter(Boolean) : [],
       multimodalNotes: parsed.multimodalNotes || 'Procesado mediante tu cuota personal de Gemini.',
       wordCount: extractedText.split(/\s+/).filter(Boolean).length,
     },
@@ -370,14 +372,17 @@ export async function generateVisitorQuestionsWithGemini(
   const isJacqueline = config.difficulty === 'jacqueline';
 
   const docsContext = docs
-    .map((d, idx) => `=== DOCUMENTO SUBIDO #${idx + 1}: "${d.name}" (${d.category}) ===
-${d.analysis?.summary ? `Resumen del documento: ${d.analysis.summary}` : ''}
+    .map((d, idx) => {
+      const cleanRaw = cleanExtractedText(d.rawText || '');
+      return `=== DOCUMENTO SUBIDO #${idx + 1}: "${d.name}" (${d.category}) ===
+${d.analysis?.summary ? `Resumen del documento: ${cleanExtractedText(d.analysis.summary)}` : ''}
 ${d.analysis?.keyThemes?.length ? `Temas clave: ${d.analysis.keyThemes.join(', ')}` : ''}
 ${d.analysis?.handwrittenNotes?.length ? `Notas manuscritas (HTR): ${d.analysis.handwrittenNotes.join('; ')}` : ''}
 ${d.analysis?.diagramDescriptions?.length ? `Diagramas/Esquemas: ${d.analysis.diagramDescriptions.join('; ')}` : ''}
-Contenido textual extraído del documento:
-${(d.rawText || '').slice(0, 12000)}
-`)
+Contenido textual limpio del documento:
+${cleanRaw.slice(0, 12000)}
+`;
+    })
     .join('\n\n');
 
   const allowedDocNames = docs.map(d => `"${d.name}"`).join(', ');
@@ -385,14 +390,15 @@ ${(d.rawText || '').slice(0, 12000)}
   const systemPrompt = `Eres StudyMaster AI, un generador pedagógico de cuestionarios de alta precisión.
 Genera exactamente ${config.questionCount} preguntas basadas ÚNICA Y EXCLUSIVAMENTE en el contenido de los documentos subidos en esta sesión (${allowedDocNames}).
 
-REGLA ESTRICTA DE EXCLUSIVIDAD DOCUMENTAL:
+REGLA ESTRICTA DE EXCLUSIVIDAD Y CALIDAD PEDAGÓGICA:
 - Prohibido inventar preguntas sobre temas que NO aparezcan en los documentos listados abajo.
-- Prohibido usar ejemplos externos (como biología celular, derecho o transformers) si esos documentos no están en la lista actual.
 - El campo "sourceDocName" DEBE ser exactamente uno de estos nombres: ${allowedDocNames}.
+- El campo "topicTitle" es OBLIGATORIO en cada pregunta y debe contener el TÍTULO DE LA TEMÁTICA o apartado específico del documento al que corresponde la pregunta (ej. "Entrevista Clínica y Psicodiagnóstico", "Evaluación Psicológica", etc.).
+- Todas las preguntas y respuestas deben tener sentido gramatical, coherencia lógica y rigor académico en español. Prohibido usar opciones genéricas como "Ninguno de los conceptos citados" o palabras cortadas.
 
 REGLAS DE MODALIDADES (Usa únicamente estas modalidades seleccionadas: ${config.selectedModalities.join(', ')}):
-1. 'multiple_choice': 4 opciones plausibles basadas en el documento. Solo 1 respuesta correcta ("correctAnswer" debe ser idéntica a una de las 4 opciones).
-2. 'true_false': Afirmación clara sobre el documento. Opciones: ["Verdadero", "Falso"]. "correctAnswer": "Verdadero" o "Falso".
+1. 'multiple_choice': Pregunta clara de comprensión/análisis con 4 opciones plausibles basadas en el documento. Solo 1 respuesta correcta ("correctAnswer" debe ser idéntica a una de las 4 opciones).
+2. 'true_false': Afirmación clara y con sentido completo sobre el documento. Opciones: ["Verdadero", "Falso"]. "correctAnswer": "Verdadero" o "Falso".
 3. 'fill_blank': Oración clave del documento donde se omite un concepto fundamental ("fillInContext" con "sentenceBefore", "targetWord", "sentenceAfter", y "correctAnswer" igual a "targetWord").
 4. 'open_question': Pregunta de desarrollo sobre el documento con "officialAnswer" detallada extraída del documento.
 
@@ -407,20 +413,22 @@ ${
     : 'Preguntas directas sobre conceptos básicos y definiciones literales del documento.'
 }
 
-Devuelve ÚNICAMENTE un array JSON válido con objetos que tengan: id, type, difficulty, prompt, options, correctAnswer, fillInContext, officialAnswer, explanation, sourceDocName.`;
+Devuelve ÚNICAMENTE un array JSON válido con objetos que tengan: id, type, difficulty, topicTitle, prompt, options, correctAnswer, fillInContext, officialAnswer, explanation, sourceDocName.`;
 
   try {
-    // Also attach inlineData for any uploaded image/PDF documents if rawText is short
+    // Attach inlineData for uploaded PDF/image documents so Gemini reads visual text, tables, and embedded images directly
     const parts: any[] = [];
     for (const d of docs) {
-      if (d.base64Data && d.mimeType && (!d.rawText || d.rawText.length < 300)) {
+      if (d.base64Data && d.mimeType && (d.category === 'image' || d.category === 'canva' || d.category === 'pdf')) {
         const cleanBase64 = d.base64Data.replace(/^data:[^;]+;base64,/, '');
-        parts.push({
-          inlineData: {
-            data: cleanBase64,
-            mimeType: d.mimeType,
-          },
-        });
+        if (cleanBase64.length < 18 * 1024 * 1024) {
+          parts.push({
+            inlineData: {
+              data: cleanBase64,
+              mimeType: d.mimeType === 'application/octet-stream' && d.category === 'pdf' ? 'application/pdf' : d.mimeType,
+            },
+          });
+        }
       }
     }
     parts.push({ text: `${systemPrompt}\n\nDOCUMENTOS DE LA SESIÓN DE ESTUDIO:\n${docsContext}` });
@@ -435,10 +443,7 @@ Devuelve ÚNICAMENTE un array JSON válido con objetos que tengan: id, type, dif
 
     const parsed = JSON.parse(response.text?.trim() || '[]');
     const questions = Array.isArray(parsed) ? parsed : parsed.questions || [];
-    if (Array.isArray(questions) && questions.length > 0) {
-      return questions;
-    }
-    return generateFallbackQuestions(docs, config);
+    return sanitizeAndValidateQuestions(questions, docs, config);
   } catch (err: any) {
     if (err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('Alcanzaste el límite')) {
       throw new Error('Alcanzaste el límite gratuito de tu cuenta de Gemini; espera un minuto o usa el Modo Estudio Sin IA.');

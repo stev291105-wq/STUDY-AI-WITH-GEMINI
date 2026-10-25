@@ -252,11 +252,127 @@ interface ExtractedSentence {
   docName: string;
   text: string;
   keywords: string[];
+  topicTitle: string;
   sectionLabel: string;
 }
 
 /**
- * Extracts meaningful sentences and keywords strictly from the uploaded documents in the current session.
+ * Derives a clean, human-readable thematic base title from a document's filename and key themes.
+ */
+export function deriveDocumentBaseTopic(docName: string, keyThemes?: string[]): string {
+  const cleanedName = cleanExtractedText(
+    docName
+      .replace(/\.[^.]+$/, '')
+      .replace(/\(\d+\)/g, '')
+      .replace(/[_\-]+/g, ' ')
+      .replace(/\b(?:resumen|para|el|la|los|las|oral|apuntes|guia|presentacion|infografia|canva|documento|archivo|final|copia)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  );
+
+  const validNameWords = cleanedName
+    .split(/\s+/)
+    .filter(w => w.length >= 2 && !isCorruptedToken(w));
+
+  if (validNameWords.length >= 1) {
+    const formatted = validNameWords
+      .map((w, idx) => {
+        const lower = w.toLowerCase();
+        if (idx > 0 && ['y', 'e', 'de', 'del', 'en', 'con', 'sobre'].includes(lower)) {
+          return lower;
+        }
+        return w.charAt(0).toUpperCase() + w.slice(1);
+      })
+      .join(' ');
+    if (formatted.length >= 4) {
+      return formatted.slice(0, 65);
+    }
+  }
+
+  const validThemes = (keyThemes || []).filter(t => t && !isCorruptedToken(t.replace(/\s+/g, '')));
+  if (validThemes.length > 0) {
+    return validThemes.slice(0, 2).join(' y ');
+  }
+
+  return 'Conceptos Fundamentales del Documento';
+}
+
+/**
+ * Detects whether a short line in the document represents a section or thematic heading.
+ */
+function extractHeadingTopic(line: string): string | null {
+  const trimmed = line
+    .replace(/^[\s•\-*#R:;«»]+/, '')
+    .replace(/\[OCR[^\]]*\]:?/gi, '')
+    .trim();
+  if (trimmed.length < 5 || trimmed.length > 85) return null;
+
+  // Explicit heading prefixes: "Tema:", "Capítulo 4:", "Fase 1:", "Diapositiva 12:", "1.", "I."
+  const explicitMatch = /^(?:tema|cap[íi]tulo|unidad|secci[óo]n|m[óo]dulo|fase|diapositiva|t[íi]tulo|apartado)\s*\d*\s*[:.\-–]\s*(.+)$/i.exec(
+    trimmed
+  );
+  if (explicitMatch && explicitMatch[1]) {
+    const headingBody = explicitMatch[1].replace(/[.]+$/, '').trim();
+    if (headingBody.length >= 4 && !isCorruptedToken(headingBody.split(/\s+/)[0])) {
+      return headingBody;
+    }
+  }
+
+  // Numbered heading e.g. "1. Entrevista Clínica" or "2.1 Evaluación Psicodiagnóstica"
+  const numberedMatch = /^\d+(?:\.\d+)?\s*[.)\-–]\s*([A-ZÁÉÍÓÚÜÑ][^.!?]{4,70})$/.exec(trimmed);
+  if (numberedMatch && numberedMatch[1]) {
+    const words = numberedMatch[1].trim().split(/\s+/);
+    if (words.every(w => !isCorruptedToken(w))) {
+      return numberedMatch[1].trim();
+    }
+  }
+
+  // Short title line without period at the end and containing valid study words
+  if (!/[.!?]$/.test(trimmed)) {
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    const validCount = words.filter(w => isValidSpanishStudyWord(w)).length;
+    if (words.length >= 2 && words.length <= 9 && validCount >= 1 && words.every(w => !isCorruptedToken(w))) {
+      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Builds a specific thematic title (`topicTitle`) for a sentence using any detected section heading,
+ * the document's base topic, and the primary domain keywords in that sentence.
+ */
+function buildSentenceTopicTitle(
+  baseDocTopic: string,
+  activeHeading: string | null,
+  sentenceKeywords: string[]
+): string {
+  if (activeHeading && activeHeading.length >= 4) {
+    return activeHeading;
+  }
+  const cleanKw = sentenceKeywords
+    .filter(k => isValidSpanishStudyWord(k))
+    .map(k => k.charAt(0).toUpperCase() + k.slice(1).toLowerCase());
+
+  if (cleanKw.length >= 2) {
+    const kwPair = `${cleanKw[0]} y ${cleanKw[1]}`;
+    if (normalizeText(baseDocTopic).includes(normalizeText(cleanKw[0]))) {
+      return `${baseDocTopic}: ${cleanKw[1]}`;
+    }
+    return `${baseDocTopic} • ${kwPair}`;
+  }
+  if (cleanKw.length === 1) {
+    if (normalizeText(baseDocTopic).includes(normalizeText(cleanKw[0]))) {
+      return baseDocTopic;
+    }
+    return `${baseDocTopic} • ${cleanKw[0]}`;
+  }
+  return baseDocTopic;
+}
+
+/**
+ * Extracts meaningful sentences, thematic titles, and keywords strictly from the uploaded documents in the current session.
  * Rejects any corrupted PDF CMap tokens, page number headers, or non-Spanish fragments.
  */
 function extractDocumentKnowledge(docs: UploadedDoc[]): {
@@ -267,6 +383,7 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
   const keywordCounts = new Map<string, { original: string; count: number }>();
 
   for (const doc of docs) {
+    const baseDocTopic = deriveDocumentBaseTopic(doc.name, doc.analysis?.keyThemes);
     const parts: string[] = [];
 
     if (doc.rawText && !isBinaryGarbage(doc.rawText) && !doc.rawText.startsWith('[Imagen multimodal')) {
@@ -287,50 +404,73 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
     }
 
     const fullText = parts.join('\n');
-    const rawChunks = fullText
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map(s =>
-        s
-          .replace(/^[\s•\-*R:;«»]+/, '')
-          .replace(/\s+/g, ' ')
-          .trim()
-      )
-      .filter(s => isCleanStudySentence(s));
+    const lines = fullText.split(/\n+/);
+    let currentHeading: string | null = null;
 
-    for (let idx = 0; idx < rawChunks.length; idx++) {
-      const chunk = rawChunks[idx];
-      const matches = chunk.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || [];
-      const chunkKeywords: string[] = [];
-      const seenInChunk = new Set<string>();
+    for (const rawLine of lines) {
+      const trimmedLine = rawLine.trim();
+      if (!trimmedLine) continue;
 
-      for (const word of matches) {
-        if (!isValidSpanishStudyWord(word)) continue;
-        const lower = word.toLowerCase();
-        if (!seenInChunk.has(lower)) {
-          seenInChunk.add(lower);
-          chunkKeywords.push(word);
-        }
-        const existing = keywordCounts.get(lower);
-        if (existing) {
-          existing.count += 1;
-        } else {
-          keywordCounts.set(lower, { original: word, count: 1 });
+      const possibleHeading = extractHeadingTopic(trimmedLine);
+      if (possibleHeading && trimmedLine.length < 75 && !/[.!?].+[.!?]/.test(trimmedLine)) {
+        currentHeading = possibleHeading;
+        // If it's a short standalone title/heading without a full sentence predicate, only use it as the topic heading
+        if (trimmedLine.length < 60 || !/[.!?]$/.test(trimmedLine)) {
+          continue;
         }
       }
 
-      // Prefer longer, substantive academic terms first
-      chunkKeywords.sort((a, b) => b.length - a.length);
+      const rawChunks = trimmedLine
+        .replace(/^\d+(?:\.\d+)?\s*[.)\-–]\s*/, '')
+        .split(/(?<=[.!?])\s+/)
+        .map(s =>
+          s
+            .replace(/^[\s•\-*R:;«»]+/, '')
+            .replace(/\[OCR[^\]]*\]:?/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+        )
+        .filter(s => isCleanStudySentence(s) && s.length >= 35 && s.split(/\s+/).length >= 6);
 
-      if (chunkKeywords.length >= 1) {
-        const cleanSentenceText =
-          chunk.endsWith('.') || chunk.endsWith('?') || chunk.endsWith('!') ? chunk : `${chunk}.`;
-        if (!sentences.some(existing => normalizeText(existing.text) === normalizeText(cleanSentenceText))) {
-          sentences.push({
-            docName: doc.name,
-            text: cleanSentenceText,
-            keywords: chunkKeywords,
-            sectionLabel: `Fragmento #${sentences.filter(s => s.docName === doc.name).length + 1} del documento`,
-          });
+      for (const chunk of rawChunks) {
+        const inlineHeading = extractHeadingTopic(chunk.split(':')[0] || '');
+        const effectiveHeading = inlineHeading || currentHeading;
+
+        const matches = chunk.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || [];
+        const chunkKeywords: string[] = [];
+        const seenInChunk = new Set<string>();
+
+        for (const word of matches) {
+          if (!isValidSpanishStudyWord(word)) continue;
+          const lower = word.toLowerCase();
+          if (!seenInChunk.has(lower)) {
+            seenInChunk.add(lower);
+            chunkKeywords.push(word);
+          }
+          const existing = keywordCounts.get(lower);
+          if (existing) {
+            existing.count += 1;
+          } else {
+            keywordCounts.set(lower, { original: word, count: 1 });
+          }
+        }
+
+        // Prefer substantive academic terms first
+        chunkKeywords.sort((a, b) => b.length - a.length);
+
+        if (chunkKeywords.length >= 1) {
+          const cleanSentenceText =
+            chunk.endsWith('.') || chunk.endsWith('?') || chunk.endsWith('!') ? chunk : `${chunk}.`;
+          if (!sentences.some(existing => normalizeText(existing.text) === normalizeText(cleanSentenceText))) {
+            const topicTitle = buildSentenceTopicTitle(baseDocTopic, effectiveHeading, chunkKeywords);
+            sentences.push({
+              docName: doc.name,
+              text: cleanSentenceText,
+              keywords: chunkKeywords,
+              topicTitle,
+              sectionLabel: topicTitle,
+            });
+          }
         }
       }
     }
@@ -338,7 +478,7 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
     // Also include valid keyThemes if provided
     if (doc.analysis?.keyThemes) {
       for (const theme of doc.analysis.keyThemes) {
-        const cleanTheme = theme.trim();
+        const cleanTheme = cleanExtractedText(theme).trim();
         const themeWords = cleanTheme.split(/\s+/).filter(w => !isCorruptedToken(w));
         if (
           cleanTheme.length >= 4 &&
@@ -361,18 +501,12 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
       const rawValidWords = (sanitizedRaw.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || []).filter(w =>
         isValidSpanishStudyWord(w)
       );
-      const baseName = doc.name
-        .replace(/\.[^.]+$/, '')
-        .replace(/\(\d+\)/g, '')
-        .replace(/[_\-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      const nameWords = baseName
+      const baseWords = baseDocTopic
         .split(/\s+/)
         .filter(w => isValidSpanishStudyWord(w));
 
       const combinedValid = Array.from(
-        new Set([...rawValidWords, ...nameWords].map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+        new Set([...rawValidWords, ...baseWords].map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
       );
       const kws = combinedValid.length > 0 ? combinedValid : ['Evaluación', 'Diagnóstico', 'Metodología'];
 
@@ -383,14 +517,15 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
         }
       }
 
-      const primaryTopic = kws[0] || baseName;
+      const primaryTopic = kws[0] || baseDocTopic;
       const secondaryTopic = kws[1] || kws[0] || 'Análisis';
 
       sentences.push({
         docName: doc.name,
         text: `El eje conceptual principal desarrollado en el material de estudio comprende el análisis de ${primaryTopic} y su articulación práctica con ${secondaryTopic}.`,
         keywords: [primaryTopic, secondaryTopic],
-        sectionLabel: 'Conceptos centrales del documento',
+        topicTitle: `${baseDocTopic} • Fundamentos de ${primaryTopic}`,
+        sectionLabel: `${baseDocTopic} • Fundamentos de ${primaryTopic}`,
       });
 
       if (kws.length >= 2) {
@@ -398,14 +533,15 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
           docName: doc.name,
           text: `Dentro del estudio de ${primaryTopic}, el concepto de ${secondaryTopic} constituye un elemento fundamental para la evaluación y comprensión integral del caso.`,
           keywords: [secondaryTopic, primaryTopic],
-          sectionLabel: 'Síntesis temática del documento',
+          topicTitle: `${baseDocTopic} • Relación con ${secondaryTopic}`,
+          sectionLabel: `${baseDocTopic} • Relación con ${secondaryTopic}`,
         });
       }
     }
   }
 
   const allKeywords = Array.from(keywordCounts.values())
-    .filter(k => !isCorruptedToken(k.original))
+    .filter(k => !isCorruptedToken(k.original) && isValidSpanishStudyWord(k.original))
     .sort((a, b) => b.count - a.count || b.original.length - a.original.length)
     .map(k => k.original);
 
@@ -466,8 +602,45 @@ function splitSentenceAroundKeyword(
 }
 
 /**
+ * Builds a plausible, grammatically natural false statement from a true document sentence
+ * by substituting a key concept or inverting the core relationship cleanly.
+ */
+function buildNaturalFalseStatement(
+  sObj: ExtractedSentence,
+  split: { sentenceBefore: string; targetWord: string; sentenceAfter: string },
+  replacementKeyword: string | undefined,
+  difficulty: DifficultyLevel
+): string {
+  if (replacementKeyword && split.sentenceBefore && split.sentenceAfter) {
+    const formattedReplacement = matchOptionCase(replacementKeyword, split.targetWord);
+    if (difficulty === 'jacqueline' || difficulty === 'dificil') {
+      return `${split.sentenceBefore} exclusivamente ${formattedReplacement}, prescindiendo por completo de ${split.targetWord} ${split.sentenceAfter}`
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    return `${split.sentenceBefore} ${formattedReplacement} ${split.sentenceAfter}`
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // If sentence has an affirmative verb ("es", "debe", "permite", "consiste", "requiere", "genera"), negate it naturally
+  const negatedVerb = sObj.text.replace(
+    /\b(es|son|debe|deben|permite|permiten|requiere|requieren|genera|generan|constituye|establece|impone|utiliza|funciona)\b/i,
+    'no $1'
+  );
+  if (negatedVerb !== sObj.text) {
+    return negatedVerb;
+  }
+
+  return `En ningún caso se considera válido dentro del estudio de ${sObj.topicTitle} que: ${
+    sObj.text.charAt(0).toLowerCase() + sObj.text.slice(1)
+  }`;
+}
+
+/**
  * Generates questions 100% exclusively from the active documents passed in `docs`.
  * Never uses unrelated preset questions if those preset documents are not in `docs`.
+ * Every generated question includes `topicTitle` (Título de la Temática) and adapts to all 4 difficulties & 4 modalities.
  */
 export function generateFallbackQuestions(
   docs: UploadedDoc[],
@@ -486,6 +659,7 @@ export function generateFallbackQuestions(
       id: 'q-mc-1',
       type: 'multiple_choice',
       difficulty: isJacqueline ? 'jacqueline' : 'dificil',
+      topicTitle: 'Respiración Celular y Fosforilación Oxidativa',
       prompt: isJacqueline
         ? 'En la cadena de transporte de electrones mitocondrial (según los apuntes manuscritos de biología), ¿por qué razón molecular específica el Complejo II (succinato deshidrogenasa) es incapaz de contribuir directamente a la formación del gradiente electroquímico de protones en el espacio intermembrana?'
         : '¿Cuál de los siguientes complejos enzimáticos de la respiración celular mitocondrial NO bombea protones al espacio intermembrana?',
@@ -499,12 +673,13 @@ export function generateFallbackQuestions(
       officialAnswer: 'El Complejo II (succinato deshidrogenasa) transfiere electrones desde el FADH2 hacia la ubiquinona sin translocación de protones a través de la membrana interna.',
       explanation: 'Tal como se enfatiza en las notas manuscritas del profesor al margen del cuaderno: el Complejo II no bombea protones directamente, a diferencia de los complejos I, III y IV.',
       sourceDocName: 'Apuntes_Manuscritos_Biologia_Celular.jpg',
-      sourceSection: 'OCR HTR - Notas de clase al margen'
+      sourceSection: 'Respiración Celular y Fosforilación Oxidativa'
     },
     {
       id: 'q-mc-2',
       type: 'multiple_choice',
       difficulty: isJacqueline ? 'jacqueline' : 'medio',
+      topicTitle: 'Mecanismo de Multi-Head Scaled Dot-Product Attention',
       prompt: 'En la arquitectura Transformer (conforme a las diapositivas PPTX), ¿cuál es el propósito matemático de dividir los productos punto por sqrt(d_k) en la función de atención escalada?',
       options: [
         'Evitar magnitudes excesivas que empujen el softmax a regiones con gradientes evanescentes',
@@ -516,12 +691,13 @@ export function generateFallbackQuestions(
       officialAnswer: 'El factor 1/sqrt(d_k) contrae la escala del producto punto Q*K^T cuando d_k es grande, evitando saturación de la función softmax donde las derivadas son casi nulas.',
       explanation: 'Explicado en la Diapositiva 12: para valores grandes de d_k los productos punto crecen en magnitud, desplazando la función softmax a zonas de pendiente nula.',
       sourceDocName: 'Presentacion_Arquitecturas_LLM_Transformers.pptx',
-      sourceSection: 'Diapositiva 12: Scaled Dot-Product Attention'
+      sourceSection: 'Mecanismo de Multi-Head Scaled Dot-Product Attention'
     },
     {
       id: 'q-mc-3',
       type: 'multiple_choice',
       difficulty: isJacqueline ? 'jacqueline' : 'facil',
+      topicTitle: 'El Bloque de Constitucionalidad y Control de Convencionalidad',
       prompt: 'Según el documento de Derecho Constitucional, ¿en qué caso hito la Corte Interamericana de Derechos Humanos consagró el deber judicial del control de convencionalidad "ex officio"?',
       options: [
         'Caso Almonacid Arellano vs. Chile (2006)',
@@ -533,12 +709,13 @@ export function generateFallbackQuestions(
       officialAnswer: 'El Caso Almonacid Arellano vs. Chile (2006) estableció de manera explícita por primera vez que el Poder Judicial debe ejercer un control de convencionalidad ex officio.',
       explanation: 'Fundamentado en el Capítulo 4 de la guía: Sentencia hito Almonacid Arellano vs. Chile (2006).',
       sourceDocName: 'Guia_Derecho_Constitucional_y_DDHH.pdf',
-      sourceSection: 'Capítulo 4: Bloque de Constitucionalidad'
+      sourceSection: 'El Bloque de Constitucionalidad y Control de Convencionalidad'
     },
     {
       id: 'q-mc-4',
       type: 'multiple_choice',
       difficulty: isJacqueline ? 'jacqueline' : 'medio',
+      topicTitle: 'El Ciclo de Calvin-Benson en el Estroma del Cloroplasto',
       prompt: 'En el Ciclo de Calvin ilustrado en el esquema de Canva, ¿cuántas moléculas de Gliceraldehído-3-Fosfato (G3P) se reciclan para regenerar RuBP por cada 6 sintetizadas?',
       options: [
         '5 moléculas de G3P',
@@ -550,12 +727,13 @@ export function generateFallbackQuestions(
       officialAnswer: 'Por cada 6 moléculas de G3P formadas en la fase de reducción, 5 se destinan al reciclaje y regeneración de RuBP, dejando una ganancia neta de 1 G3P.',
       explanation: 'Confirmado en la Fase 3 del diagrama: 5 de cada 6 G3P se reciclan estequiométricamente.',
       sourceDocName: 'Infografia_Canva_Ciclo_Calvin_Fotosintesis.png',
-      sourceSection: 'Fase 3: Regeneración del aceptor RuBP'
+      sourceSection: 'Fase 3: Regeneración de RuBP'
     },
     {
       id: 'q-tf-1',
       type: 'true_false',
       difficulty: isJacqueline ? 'jacqueline' : 'medio',
+      topicTitle: 'Control de Convencionalidad Ex Officio y Principio Pro Persona',
       prompt: isJacqueline
         ? 'Bajo el principio pro homine y la jurisprudencia de la Corte IDH, los jueces nacionales sólo están obligados a ejercer control de convencionalidad si una de las partes en litigio lo solicita expresamente.'
         : 'El control de convencionalidad debe ser ejercido de oficio ("ex officio") por los jueces nacionales, incluso sin petición expresa de las partes.',
@@ -570,18 +748,20 @@ export function generateFallbackQuestions(
       id: 'q-tf-2',
       type: 'true_false',
       difficulty: isJacqueline ? 'jacqueline' : 'facil',
+      topicTitle: 'ATP Sintasa y Fuerza Protón-Motriz Mitocondrial',
       prompt: 'En la ATP Sintasa mitocondrial (Complejo V), la rotación mecánica del rotor molecular es impulsada directamente por la fuerza protón-motriz generada por el gradiente de H+.',
       options: ['Verdadero', 'Falso'],
       correctAnswer: 'Verdadero',
       officialAnswer: 'Verdadero. La ATP Sintasa opera biomecánicamente como una turbina molecular giratoria impulsada por el flujo de protones.',
       explanation: 'Anotación manuscrita destacada: "ATP Sintasa funciona como una turbina molecular giratoria impulsada por fuerza protón-motriz".',
       sourceDocName: 'Apuntes_Manuscritos_Biologia_Celular.jpg',
-      sourceSection: 'Notas HTR al margen'
+      sourceSection: 'ATP Sintasa y Fuerza Protón-Motriz'
     },
     {
       id: 'q-tf-3',
       type: 'true_false',
       difficulty: isJacqueline ? 'jacqueline' : 'dificil',
+      topicTitle: 'Codificación Posicional (Positional Encoding) en Transformers',
       prompt: 'La arquitectura Transformer prescinde de positional encodings porque el mecanismo de atención autoregresiva ya deduce intrínsecamente el orden temporal de las secuencias.',
       options: ['Verdadero', 'Falso'],
       correctAnswer: 'Falso',
@@ -594,18 +774,20 @@ export function generateFallbackQuestions(
       id: 'q-tf-4',
       type: 'true_false',
       difficulty: isJacqueline ? 'jacqueline' : 'medio',
+      topicTitle: 'Fotorrespiración y Actividad Oxigenasa de RuBisCO',
       prompt: 'La actividad oxigenasa de la enzima RuBisCO en plantas C3 aumenta la eficiencia fotosintética al generar ATP adicional durante el estrés térmico.',
       options: ['Verdadero', 'Falso'],
       correctAnswer: 'Falso',
       officialAnswer: 'Falso. La actividad oxigenasa de RuBisCO desencadena fotorrespiración (Ciclo C2), reduciendo la eficiencia fotosintética hasta un 25%.',
       explanation: 'La infografía de Canva subraya que la fotorrespiración reduce la eficiencia neta hasta un 25% en plantas C3 bajo estrés térmico.',
       sourceDocName: 'Infografia_Canva_Ciclo_Calvin_Fotosintesis.png',
-      sourceSection: 'Nota destacada en infografía'
+      sourceSection: 'Fotorrespiración en Plantas C3'
     },
     {
       id: 'q-fib-1',
       type: 'fill_blank',
       difficulty: isJacqueline ? 'jacqueline' : 'facil',
+      topicTitle: 'Principio Pro Persona en Derechos Humanos (Art. 29 CADH)',
       prompt: 'Completa la palabra clave faltante sobre el principio de interpretación de Derechos Humanos:',
       fillInContext: {
         sentenceBefore: 'El criterio hermenéutico que impone la aplicación de la interpretación jurídica más favorable a la dignidad del ser humano se conoce como principio',
@@ -622,6 +804,7 @@ export function generateFallbackQuestions(
       id: 'q-fib-2',
       type: 'fill_blank',
       difficulty: isJacqueline ? 'jacqueline' : 'medio',
+      topicTitle: 'Fase 1 del Ciclo de Calvin: Fijación del Carbono',
       prompt: 'Completa el concepto enzimático fundamental del ciclo estromático:',
       fillInContext: {
         sentenceBefore: 'La enzima responsable de fijar el CO2 atmosférico sobre la ribulosa-1,5-bisfosfato (RuBP) en el estroma es la',
@@ -638,6 +821,7 @@ export function generateFallbackQuestions(
       id: 'q-fib-3',
       type: 'fill_blank',
       difficulty: isJacqueline ? 'jacqueline' : 'dificil',
+      topicTitle: 'Bioenergética Mitocondrial y Gradiente Electroquímico',
       prompt: 'Completa la variable bioenergética manuscrita del apunte:',
       fillInContext: {
         sentenceBefore: 'El gradiente electroquímico de protones que impulsa la síntesis de ATP en la cresta mitocondrial se cuantifica mediante la fuerza',
@@ -654,6 +838,7 @@ export function generateFallbackQuestions(
       id: 'q-oq-1',
       type: 'open_question',
       difficulty: isJacqueline ? 'jacqueline' : 'medio',
+      topicTitle: 'Control Difuso vs. Control Concentrado de Constitucionalidad',
       prompt: 'Explica la diferencia jurídica y los alcances prácticos entre el "Control Difuso" y el "Control Concentrado" de constitucionalidad según el documento de estudio.',
       correctAnswer: 'El control difuso es ejercido por cualquier juez con efectos inter partes, mientras que el control concentrado expulsa la norma con efectos erga omnes.',
       officialAnswer: 'Respuesta Oficial del Documento:\n1. Control Difuso: Inaplicativo inter partes.\n2. Control Concentrado: Expulsa la norma con efectos erga omnes.',
@@ -665,6 +850,7 @@ export function generateFallbackQuestions(
       id: 'q-oq-2',
       type: 'open_question',
       difficulty: isJacqueline ? 'jacqueline' : 'dificil',
+      topicTitle: 'Arquitecturas Decoder-Only y Enmascaramiento Causal',
       prompt: '¿Por qué la arquitectura Decoder-Only (como GPT y Gemini) utiliza enmascaramiento causal ("causal masking") durante la fase de atención?',
       correctAnswer: 'El enmascaramiento causal asegura que durante el entrenamiento autorregresivo la atención hacia cada token sólo pueda computarse respecto a los tokens previos.',
       officialAnswer: 'Respuesta Oficial del Documento:\nEl enmascaramiento causal garantiza que la representación de un token en la posición t solo dependa de las posiciones anteriores (1 a t).',
@@ -679,7 +865,7 @@ export function generateFallbackQuestions(
     q => activeDocNames.has(q.sourceDocName) && allowedModalities.includes(q.type)
   );
 
-  // Extract dynamic sentences & concepts strictly from activeDocs
+  // Extract dynamic sentences, thematic titles & concepts strictly from activeDocs
   const { sentences, allKeywords } = extractDocumentKnowledge(activeDocs);
 
   const dynamicPool: Question[] = [];
@@ -690,9 +876,14 @@ export function generateFallbackQuestions(
     const primaryKeyword =
       sObj.keywords[i % Math.max(1, sObj.keywords.length)] ||
       allKeywords[i % Math.max(1, allKeywords.length)] ||
-      sObj.docName.replace(/\.[^.]+$/, '');
+      deriveDocumentBaseTopic(sObj.docName);
+    const secondaryKeyword =
+      sObj.keywords[(i + 1) % Math.max(1, sObj.keywords.length)] ||
+      allKeywords[(i + 1) % Math.max(1, allKeywords.length)] ||
+      primaryKeyword;
 
     const split = splitSentenceAroundKeyword(sObj.text, primaryKeyword);
+    const topicTitle = sObj.topicTitle || deriveDocumentBaseTopic(sObj.docName);
 
     if (modality === 'multiple_choice') {
       // Build 3 clean distractors strictly from valid concepts in the uploaded documents
@@ -747,69 +938,92 @@ export function generateFallbackQuestions(
       const rawOptions = [split.targetWord, ...distractors.slice(0, 3)];
       const options = rotateOptions(rawOptions, i + 1);
 
+      let mcPrompt = '';
+      if (difficulty === 'jacqueline') {
+        mcPrompt = `Dentro del análisis de «${topicTitle}» en "${sObj.docName}", ¿qué término técnico o concepto específico fundamenta con exactitud el siguiente postulado del documento: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`;
+      } else if (difficulty === 'dificil') {
+        mcPrompt = `Al examinar la sección sobre «${topicTitle}» en "${sObj.docName}", ¿cuál de los siguientes conceptos articula de forma precisa el planteamiento: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`;
+      } else if (difficulty === 'medio') {
+        mcPrompt = `En relación con «${topicTitle}» según el documento "${sObj.docName}", ¿qué concepto completa coherentemente el enunciado: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`;
+      } else {
+        mcPrompt = `De acuerdo con el tema «${topicTitle}» en "${sObj.docName}", selecciona el concepto directo que completa la afirmación: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»`;
+      }
+
       dynamicPool.push({
         id: `doc-mc-${i + 1}`,
         type: 'multiple_choice',
         difficulty,
-        prompt: isJacqueline
-          ? `[Nivel Jacqueline • Análisis Textual de "${sObj.docName}"] Según el documento cargado, ¿qué término o concepto específico completa con exactitud el siguiente enunciado: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`
-          : `Según el documento "${sObj.docName}", ¿qué concepto completa correctamente la siguiente afirmación del texto: «${split.sentenceBefore} [ _____ ] ${split.sentenceAfter}»?`,
+        topicTitle,
+        prompt: mcPrompt,
         options,
         correctAnswer: split.targetWord,
-        officialAnswer: `En "${sObj.docName}" se establece textualmente: «${sObj.text}»`,
-        explanation: `Extraído directamente de "${sObj.docName}": «${sObj.text}»`,
+        officialAnswer: `En "${sObj.docName}" (${topicTitle}) se establece: «${sObj.text}»`,
+        explanation: `Concepto clave («${split.targetWord}») verificado en "${sObj.docName}" bajo la temática "${topicTitle}": «${sObj.text}»`,
         sourceDocName: sObj.docName,
-        sourceSection: sObj.sectionLabel,
+        sourceSection: topicTitle,
       });
     } else if (modality === 'true_false') {
       // Alternate True and False statements derived strictly from the document
       const makeTrue = i % 2 === 0;
       let statement = sObj.text;
-      let explanation = `Confirmado literalmente en "${sObj.docName}": «${sObj.text}»`;
+      let explanation = `Confirmado en "${sObj.docName}" (${topicTitle}): «${sObj.text}»`;
 
       if (!makeTrue) {
-        // Swap primaryKeyword with a distinct keyword from the doc, or negate the statement
         const replacement = allKeywords.find(
           k =>
+            !isCorruptedToken(k) &&
             normalizeText(k) !== normalizeText(split.targetWord) &&
+            !normalizeText(sObj.text).includes(normalizeText(k)) &&
             k.length >= 4
         );
-        if (replacement && split.sentenceBefore) {
-          statement = `${split.sentenceBefore} ${replacement} (y en ningún caso ${split.targetWord}) ${split.sentenceAfter}`.trim();
-        } else {
-          statement = `El documento "${sObj.docName}" afirma que es completamente falso o inexistente que: ${sObj.text}`;
-        }
-        explanation = `La afirmación es FALSA porque el documento "${sObj.docName}" establece en realidad lo siguiente: «${sObj.text}»`;
+        statement = buildNaturalFalseStatement(sObj, split, replacement, difficulty);
+        explanation = `La afirmación es FALSA porque en "${sObj.docName}" (${topicTitle}) se establece en realidad que: «${sObj.text}»`;
       }
+
+      const tfPrefix =
+        difficulty === 'jacqueline'
+          ? `Evalúa con rigor técnico según "${sObj.docName}" (${topicTitle}) si la siguiente proposición es Verdadera o Falsa`
+          : difficulty === 'dificil'
+          ? `Analiza el criterio expuesto en "${sObj.docName}" sobre «${topicTitle}» e indica si es Verdadero o Falso`
+          : `De acuerdo con el documento "${sObj.docName}" respecto a «${topicTitle}», indica si el siguiente enunciado es Verdadero o Falso`;
 
       dynamicPool.push({
         id: `doc-tf-${i + 1}`,
         type: 'true_false',
         difficulty,
-        prompt: `De acuerdo exclusivamente con el documento "${sObj.docName}", indica si el siguiente enunciado es Verdadero o Falso: «${statement}»`,
+        topicTitle,
+        prompt: `${tfPrefix}: «${statement}»`,
         options: ['Verdadero', 'Falso'],
         correctAnswer: makeTrue ? 'Verdadero' : 'Falso',
-        officialAnswer: `${makeTrue ? 'Verdadero' : 'Falso'}. Texto original en "${sObj.docName}": «${sObj.text}»`,
+        officialAnswer: `${makeTrue ? 'Verdadero' : 'Falso'}. Referencia documental en "${sObj.docName}" (${topicTitle}): «${sObj.text}»`,
         explanation,
         sourceDocName: sObj.docName,
-        sourceSection: sObj.sectionLabel,
+        sourceSection: topicTitle,
       });
     } else if (modality === 'fill_blank') {
+      const fibPrompt =
+        difficulty === 'jacqueline'
+          ? `Completa con precisión el término técnico central sobre «${topicTitle}» extraído de "${sObj.docName}":`
+          : difficulty === 'dificil'
+          ? `Identifica y escribe el concepto clave que articula el siguiente postulado sobre «${topicTitle}» en "${sObj.docName}":`
+          : `Completa la palabra o concepto clave sobre «${topicTitle}» según el documento "${sObj.docName}":`;
+
       dynamicPool.push({
         id: `doc-fib-${i + 1}`,
         type: 'fill_blank',
         difficulty,
-        prompt: `Completa la palabra o concepto clave extraído de "${sObj.docName}":`,
+        topicTitle,
+        prompt: fibPrompt,
         fillInContext: {
-          sentenceBefore: split.sentenceBefore || 'Según el documento,',
+          sentenceBefore: split.sentenceBefore || `En relación con ${topicTitle}, el documento destaca`,
           targetWord: split.targetWord,
-          sentenceAfter: split.sentenceAfter || `(extraído de ${sObj.docName}).`,
+          sentenceAfter: split.sentenceAfter || `como elemento clave en ${sObj.docName}.`,
         },
         correctAnswer: split.targetWord,
-        officialAnswer: `Concepto exacto: "${split.targetWord}". Oración original en "${sObj.docName}": «${sObj.text}»`,
-        explanation: `Cita directa de "${sObj.docName}": «${sObj.text}»`,
+        officialAnswer: `Concepto exacto: "${split.targetWord}". Enunciado original en "${sObj.docName}" (${topicTitle}): «${sObj.text}»`,
+        explanation: `Cita directa del apartado "${topicTitle}" en "${sObj.docName}": «${sObj.text}»`,
         sourceDocName: sObj.docName,
-        sourceSection: sObj.sectionLabel,
+        sourceSection: topicTitle,
       });
     } else {
       // open_question
@@ -819,18 +1033,31 @@ export function generateFallbackQuestions(
           ? ` ${nextSentenceObj.text}`
           : '';
 
+      let openPrompt = '';
+      if (difficulty === 'jacqueline') {
+        openPrompt =
+          normalizeText(primaryKeyword) !== normalizeText(secondaryKeyword)
+            ? `Respecto a la temática «${topicTitle}» en "${sObj.docName}", fundamenta con precisión técnica cómo se articula el concepto de «${split.targetWord}» con «${secondaryKeyword}» y cuáles son sus implicaciones según el documento.`
+            : `Respecto a la temática «${topicTitle}» en "${sObj.docName}", desarrolla exhaustivamente los fundamentos y alcances técnicos de «${split.targetWord}» expuestos en el texto.`;
+      } else if (difficulty === 'dificil') {
+        openPrompt = `Analiza en profundidad lo expuesto en "${sObj.docName}" sobre la temática «${topicTitle}»: ¿qué papel cumple «${split.targetWord}» y cómo se justifica dentro del planteamiento del autor?`;
+      } else if (difficulty === 'medio') {
+        openPrompt = `De acuerdo con el documento "${sObj.docName}" en el apartado «${topicTitle}», explica en qué consiste «${split.targetWord}» y cómo se relaciona con las ideas principales de esa sección.`;
+      } else {
+        openPrompt = `Según el documento "${sObj.docName}" dentro del tema «${topicTitle}», describe qué se establece directamente acerca de «${split.targetWord}».`;
+      }
+
       dynamicPool.push({
         id: `doc-oq-${i + 1}`,
         type: 'open_question',
         difficulty,
-        prompt: isJacqueline
-          ? `NIVEL JACQUELINE (${sObj.docName}): Desarrolla y fundamenta con precisión lo que expone el documento acerca de «${split.targetWord}» y su relación con el contexto: "${split.sentenceBefore.slice(0, 80)}...".`
-          : `Según el documento "${sObj.docName}", explica qué se establece sobre «${split.targetWord}» en relación con este punto del texto.`,
+        topicTitle,
+        prompt: openPrompt,
         correctAnswer: sObj.text,
-        officialAnswer: `Respuesta Oficial de "${sObj.docName}":\n«${sObj.text}${extraContext}»`,
-        explanation: `Fundamentado en el texto íntegro cargado en "${sObj.docName}".`,
+        officialAnswer: `Respuesta Oficial de "${sObj.docName}" (${topicTitle}):\n«${sObj.text}${extraContext}»`,
+        explanation: `Fundamentado en la sección "${topicTitle}" del documento "${sObj.docName}".`,
         sourceDocName: sObj.docName,
-        sourceSection: sObj.sectionLabel,
+        sourceSection: topicTitle,
       });
     }
   }
@@ -845,9 +1072,204 @@ export function generateFallbackQuestions(
       ...template,
       id: `${template.id}-${result.length + 1}`,
       difficulty,
+      topicTitle: template.topicTitle || template.sourceSection || deriveDocumentBaseTopic(template.sourceDocName),
     });
     idx++;
   }
 
   return result.slice(0, questionCount);
 }
+
+/**
+ * Validates, repairs, and enriches questions returned by any AI engine (`gemini_env`, `gemini_visitor`, `custom_keys`).
+ * Guarantees that:
+ * 1. Every question has a clear, non-generic `topicTitle` (Título de la temática).
+ * 2. Every question belongs strictly to the uploaded `docs`.
+ * 3. No question prompt, option, or answer contains PDF CMap corruption (`isCorruptedToken`) or filler like "Ninguno de los conceptos...".
+ * 4. Every modality (`multiple_choice`, `true_false`, `fill_blank`, `open_question`) has complete, valid fields.
+ */
+export function sanitizeAndValidateQuestions(
+  rawQuestions: any[],
+  docs: UploadedDoc[],
+  config: QuizConfig
+): Question[] {
+  const activeDocs = docs && docs.length > 0 ? docs : PRESET_SAMPLE_DOCUMENTS;
+  const fallbackPool = generateFallbackQuestions(activeDocs, config);
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+    return fallbackPool;
+  }
+
+  const validDocNames = new Set(activeDocs.map(d => d.name));
+  const defaultDoc = activeDocs[0];
+  const allowedModalities: QuestionModality[] =
+    config.selectedModalities && config.selectedModalities.length > 0
+      ? config.selectedModalities
+      : ['multiple_choice'];
+
+  const validated: Question[] = [];
+
+  for (let i = 0; i < rawQuestions.length && validated.length < config.questionCount; i++) {
+    const raw = rawQuestions[i];
+    if (!raw || typeof raw !== 'object') continue;
+
+    const rawPrompt = cleanExtractedText(String(raw.prompt || '')).trim();
+    // Reject if prompt is empty or still contains unrepairable CMap garbage
+    const promptWords = rawPrompt.split(/\s+/).filter(Boolean);
+    const corruptedInPrompt = promptWords.filter(w => isCorruptedToken(w)).length;
+    if (!rawPrompt || promptWords.length < 4 || corruptedInPrompt / promptWords.length > 0.15) {
+      if (fallbackPool[i]) validated.push(fallbackPool[i]);
+      continue;
+    }
+
+    const type: QuestionModality = allowedModalities.includes(raw.type)
+      ? raw.type
+      : allowedModalities[i % allowedModalities.length];
+
+    const matchedDocName =
+      raw.sourceDocName && validDocNames.has(raw.sourceDocName)
+        ? raw.sourceDocName
+        : activeDocs[i % activeDocs.length]?.name || defaultDoc.name;
+    const matchedDoc = activeDocs.find(d => d.name === matchedDocName) || defaultDoc;
+
+    // Resolve thematic title (`topicTitle`)
+    let topicTitle = cleanExtractedText(
+      String(raw.topicTitle || raw.tema || raw.theme || raw.sourceSection || '')
+    ).trim();
+    if (
+      !topicTitle ||
+      topicTitle.length < 4 ||
+      /^fragmento\s*#/i.test(topicTitle) ||
+      isCorruptedToken(topicTitle.split(/\s+/)[0] || '')
+    ) {
+      topicTitle = deriveDocumentBaseTopic(matchedDoc.name, matchedDoc.analysis?.keyThemes);
+    }
+
+    const officialAnswer =
+      cleanExtractedText(String(raw.officialAnswer || raw.correctAnswer || '')).trim() ||
+      `Referencia oficial verificada en "${matchedDocName}" (${topicTitle}).`;
+    const explanation =
+      cleanExtractedText(String(raw.explanation || raw.officialAnswer || '')).trim() ||
+      `Fundamentado en el apartado "${topicTitle}" del documento "${matchedDocName}".`;
+
+    if (type === 'true_false') {
+      const normAns = normalizeText(String(raw.correctAnswer || 'Verdadero'));
+      const isFalse = normAns === 'falso' || normAns === 'false' || normAns === 'no';
+      validated.push({
+        id: String(raw.id || `ai-tf-${i + 1}`),
+        type: 'true_false',
+        difficulty: config.difficulty,
+        topicTitle,
+        prompt: rawPrompt,
+        options: ['Verdadero', 'Falso'],
+        correctAnswer: isFalse ? 'Falso' : 'Verdadero',
+        officialAnswer,
+        explanation,
+        sourceDocName: matchedDocName,
+        sourceSection: topicTitle,
+      });
+    } else if (type === 'multiple_choice') {
+      const rawOpts = Array.isArray(raw.options)
+        ? raw.options
+            .map((o: any) => cleanExtractedText(String(o || '')).trim())
+            .filter(
+              (o: string) =>
+                Boolean(o) &&
+                !/ninguno de los conceptos citados/i.test(o) &&
+                !o.split(/\s+/).some((w: string) => isCorruptedToken(w))
+            )
+        : [];
+
+      const cleanCorrect = cleanExtractedText(String(raw.correctAnswer || rawOpts[0] || '')).trim();
+      if (!cleanCorrect || isCorruptedToken(cleanCorrect) || rawOpts.length < 2) {
+        if (fallbackPool[i]) validated.push(fallbackPool[i]);
+        continue;
+      }
+
+      const finalOpts = [...rawOpts];
+      if (!finalOpts.some(o => normalizeText(o) === normalizeText(cleanCorrect))) {
+        finalOpts[0] = cleanCorrect;
+      }
+      while (finalOpts.length < 4) {
+        const extra = `Análisis complementario de ${topicTitle} (${finalOpts.length + 1})`;
+        if (!finalOpts.includes(extra)) finalOpts.push(extra);
+      }
+
+      validated.push({
+        id: String(raw.id || `ai-mc-${i + 1}`),
+        type: 'multiple_choice',
+        difficulty: config.difficulty,
+        topicTitle,
+        prompt: rawPrompt,
+        options: finalOpts.slice(0, 4),
+        correctAnswer:
+          finalOpts.find(o => normalizeText(o) === normalizeText(cleanCorrect)) || cleanCorrect,
+        officialAnswer,
+        explanation,
+        sourceDocName: matchedDocName,
+        sourceSection: topicTitle,
+      });
+    } else if (type === 'fill_blank') {
+      const targetWord = cleanExtractedText(
+        String(raw.fillInContext?.targetWord || raw.correctAnswer || '')
+      ).trim();
+      if (!targetWord || isCorruptedToken(targetWord)) {
+        if (fallbackPool[i]) validated.push(fallbackPool[i]);
+        continue;
+      }
+      const sentenceBefore = cleanExtractedText(
+        String(raw.fillInContext?.sentenceBefore || `En relación con ${topicTitle}, el documento establece que`)
+      ).trim();
+      const sentenceAfter = cleanExtractedText(
+        String(raw.fillInContext?.sentenceAfter || `constituye un concepto fundamental del tema.`)
+      ).trim();
+
+      validated.push({
+        id: String(raw.id || `ai-fib-${i + 1}`),
+        type: 'fill_blank',
+        difficulty: config.difficulty,
+        topicTitle,
+        prompt: rawPrompt,
+        fillInContext: {
+          sentenceBefore,
+          targetWord,
+          sentenceAfter,
+        },
+        correctAnswer: targetWord,
+        officialAnswer,
+        explanation,
+        sourceDocName: matchedDocName,
+        sourceSection: topicTitle,
+      });
+    } else {
+      // open_question
+      const cleanCorrect = cleanExtractedText(String(raw.correctAnswer || officialAnswer)).trim();
+      validated.push({
+        id: String(raw.id || `ai-oq-${i + 1}`),
+        type: 'open_question',
+        difficulty: config.difficulty,
+        topicTitle,
+        prompt: rawPrompt,
+        correctAnswer: cleanCorrect,
+        officialAnswer,
+        explanation,
+        sourceDocName: matchedDocName,
+        sourceSection: topicTitle,
+      });
+    }
+  }
+
+  // Top up from fallbackPool if AI returned fewer valid questions than requested
+  let fIdx = 0;
+  while (validated.length < config.questionCount && fIdx < fallbackPool.length) {
+    const candidate = fallbackPool[fIdx++];
+    if (!validated.some(q => normalizeText(q.prompt) === normalizeText(candidate.prompt))) {
+      validated.push({
+        ...candidate,
+        id: `${candidate.id}-topup-${validated.length + 1}`,
+      });
+    }
+  }
+
+  return validated.slice(0, config.questionCount);
+}
+

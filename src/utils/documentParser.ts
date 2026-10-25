@@ -83,14 +83,17 @@ export function isValidSpanishStudyWord(word: string): boolean {
   // Must start with a valid letter
   if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/.test(clean)) return false;
 
-  // Reject broken word fragments from split PDF glyphs (e.g. "sicodiagnóstico" missing initial P, "eNista", "ageA")
+  // Reject broken word fragments from split PDF glyphs (e.g. "sicodiagnóstico" missing initial P, "eNista", "ageA", "esumen")
   const lower = clean.toLowerCase();
   if (
     lower.startsWith('sicodiagn') ||
+    lower.startsWith('esumen') ||
     lower === 'agea' ||
     lower === 'aofa' ||
     lower === 'enista' ||
     lower === 'entm' ||
+    lower === 'pama' ||
+    lower === 'omal' ||
     lower === 'page' ||
     lower === 'pagina'
   ) {
@@ -101,8 +104,31 @@ export function isValidSpanishStudyWord(word: string): boolean {
 }
 
 /**
- * Repairs and sanitizes raw text extracted from PDFs or OCR, removing pagination headers/footers
- * and fixing CMap space-collision artifacts (such as 'A' injected in place of spaces).
+ * Repairs custom PDF subset font cipher tokens where 'A' was mapped to space (' '),
+ * 'M' to 'r', and 'N' to 'v' (e.g., "esumenApaMaAelAoMal" -> "Resumen para el oral").
+ */
+function repairSubsetFontCipher(input: string): string {
+  return input
+    .replace(/\bR?\s*esumenApaMaAelAoMal\b/gi, 'Resumen para el oral')
+    .replace(/(?:^|\s)R\s*:\s*AP\s+sicodiagn[óo]sticoAyAEntM\s*eNista/gi, ' Psicodiagnóstico y Entrevista')
+    .replace(/\bP\s+sicodiagn[óo]stico/gi, 'Psicodiagnóstico')
+    .replace(/\bsicodiagn[óo]stico\b/gi, 'Psicodiagnóstico')
+    .replace(/\bEntM\s*eNista\b/gi, 'Entrevista')
+    .replace(/\bpaMa\b/g, 'para')
+    .replace(/\boMal\b/g, 'oral')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AyA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 y $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AeA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 e $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AdeA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 de $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AelA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 el $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AlaA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 la $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AenA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 en $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AconA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 con $2')
+    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})AparaA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,})\b/g, '$1 para $2');
+}
+
+/**
+ * Repairs and sanitizes raw text extracted from PDFs or OCR, removing pagination headers/footers,
+ * OCR border noise, and fixing CMap space-collision artifacts (such as 'A' injected in place of spaces).
  */
 export function sanitizeAcademicText(raw: string): string {
   if (!raw) return '';
@@ -111,6 +137,7 @@ export function sanitizeAcademicText(raw: string): string {
     .replace(/\u0000/g, ' ')
     .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ' ')
     .replace(/\uFFFD+/g, ' ')
+    .replace(/[|¦~^§¤¬¨´`]+/g, ' ')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n');
 
@@ -123,17 +150,7 @@ export function sanitizeAcademicText(raw: string): string {
     .replace(/(?:^|\n)\s*[-–—]?\s*\d{1,3}\s*[-–—]?\s*(?=\n|$)/g, '\n');
 
   // 2. Repair PDF CMap space collisions where 'A' was mapped to space between words
-  // e.g. ":AP sicodiagnósticoAyAEntM eNista" -> "Psicodiagnóstico y Entrevista"
-  text = text
-    .replace(/(?:^|\s)R\s*:\s*AP\s+sicodiagn[óo]sticoAyAEntM\s*eNista/gi, ' Psicodiagnóstico y Entrevista')
-    .replace(/\bP\s+sicodiagn[óo]stico/gi, 'Psicodiagnóstico')
-    .replace(/\bsicodiagn[óo]stico\b/gi, 'Psicodiagnóstico')
-    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})AyA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})\b/g, '$1 y $2')
-    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})AeA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})\b/g, '$1 e $2')
-    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})AdeA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})\b/g, '$1 de $2')
-    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})AenA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})\b/g, '$1 en $2')
-    .replace(/\b([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})AconA([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3,})\b/g, '$1 con $2')
-    .replace(/\bEntM\s*eNista\b/gi, 'Entrevista');
+  text = repairSubsetFontCipher(text);
 
   // 3. Rejoin hyphenated line breaks common in academic PDFs: "psico-\ndiagnóstico" -> "psicodiagnóstico"
   text = text.replace(/([a-záéíóúüñ])-\s*\n\s*([a-záéíóúüñ])/gi, '$1$2');
@@ -428,8 +445,8 @@ async function preprocessImageForOCR(source: File | Blob | HTMLCanvasElement | s
       URL.revokeObjectURL(objectUrl);
     }
 
-    const maxDim = 2000;
-    const minDim = 900;
+    const maxDim = 2200;
+    const minDim = 1100;
     let width = img.naturalWidth || img.width || 800;
     let height = img.naturalHeight || img.height || 600;
 
@@ -449,20 +466,40 @@ async function preprocessImageForOCR(source: File | Blob | HTMLCanvasElement | s
     const ctx = canvas.getContext('2d');
     if (!ctx) return source;
 
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, width, height);
     ctx.drawImage(img, 0, 0, width, height);
 
-    // Apply gentle grayscale + contrast boost to sharpen text on colored/notebook backgrounds
+    // Smooth grayscale + automatic dark-background inversion so Tesseract LSTM preserves anti-aliased glyph edges
     const imgData = ctx.getImageData(0, 0, width, height);
     const data = imgData.data;
+    let totalLum = 0;
+    let minLum = 255;
+    let maxLum = 0;
+    const pixelCount = data.length / 4;
+
     for (let i = 0; i < data.length; i += 4) {
       const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      // Contrast stretch around midpoint 165
-      const stretched = lum < 160 ? Math.max(0, (lum - 40) * 0.9) : Math.min(255, lum + 35);
-      data[i] = stretched;
-      data[i + 1] = stretched;
-      data[i + 2] = stretched;
+      totalLum += lum;
+      if (lum < minLum) minLum = lum;
+      if (lum > maxLum) maxLum = lum;
+    }
+
+    const avgLum = pixelCount > 0 ? totalLum / pixelCount : 180;
+    const isDarkBackground = avgLum < 105;
+    const range = Math.max(40, maxLum - minLum);
+
+    for (let i = 0; i < data.length; i += 4) {
+      let lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (isDarkBackground) {
+        lum = 255 - lum;
+      }
+      const normalized = Math.min(255, Math.max(0, Math.round(((lum - minLum) / range) * 255)));
+      data[i] = normalized;
+      data[i + 1] = normalized;
+      data[i + 2] = normalized;
     }
     ctx.putImageData(imgData, 0, 0);
     return canvas;
@@ -487,12 +524,12 @@ export async function extractImageTextWithOCR(
     if (!recognizeFn) return '';
 
     const ocrPromise = recognizeFn(prepared, 'spa+eng');
-    const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 18000));
+    const timeoutPromise = new Promise<null>(resolve => setTimeout(() => resolve(null), 20000));
 
     const result = await Promise.race([ocrPromise, timeoutPromise]);
     if (result && result.data && typeof result.data.text === 'string') {
       const cleaned = sanitizeAcademicText(result.data.text);
-      if (cleaned.length >= 15 && !isBinaryGarbage(cleaned)) {
+      if (cleaned.length >= 12 && !isBinaryGarbage(cleaned)) {
         return cleaned;
       }
     }
@@ -509,9 +546,12 @@ export async function extractImageTextWithOCR(
  */
 async function extractPdfWithPdfJs(buffer: ArrayBuffer): Promise<string> {
   try {
-    // Register in-process worker handler so pdfjs-dist works in both Vite browser and Node test runner without external CDN dependency
+    // Register in-process worker handler on globalThis.pdfjsWorker so pdfjs-dist works in both Vite browser and Node test runner without external CDN or UnknownErrorException
     // @ts-expect-error - pdf.worker.mjs does not ship a separate .d.mts file
-    await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
+    const workerModule = await import('pdfjs-dist/legacy/build/pdf.worker.mjs');
+    if (typeof globalThis !== 'undefined' && !(globalThis as any).pdfjsWorker) {
+      (globalThis as any).pdfjsWorker = workerModule;
+    }
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
     const dataCopy = new Uint8Array(buffer.slice(0));
@@ -578,24 +618,12 @@ async function extractPdfWithPdfJs(buffer: ArrayBuffer): Promise<string> {
       }
 
       const cleanedPage = sanitizeAcademicText(pageStr);
-      if (cleanedPage.trim().length > 0) {
+      if (cleanedPage.trim().length >= 30) {
         pageTexts.push(cleanedPage.trim());
-      }
-    }
-
-    const fullDigitalText = sanitizeAcademicText(pageTexts.join('\n\n'));
-    if (fullDigitalText.length >= 30 && !isBinaryGarbage(fullDigitalText)) {
-      return fullDigitalText;
-    }
-
-    // Scanned PDF fallback: If the PDF had no digital text and we are in the browser, render up to 3 pages to canvas and OCR them!
-    if (typeof document !== 'undefined' && pdfDoc.numPages > 0) {
-      const ocrPages: string[] = [];
-      const pagesToOcr = Math.min(pdfDoc.numPages, 3);
-      for (let pageNum = 1; pageNum <= pagesToOcr; pageNum++) {
+      } else if (typeof document !== 'undefined' && pageNum <= 5) {
+        // Hybrid or scanned PDF page: render page to canvas and run OCR on the embedded image/scan!
         try {
-          const page = await pdfDoc.getPage(pageNum);
-          const viewport = page.getViewport({ scale: 1.75 });
+          const viewport = page.getViewport({ scale: 1.85 });
           const canvas = document.createElement('canvas');
           canvas.width = viewport.width;
           canvas.height = viewport.height;
@@ -603,18 +631,26 @@ async function extractPdfWithPdfJs(buffer: ArrayBuffer): Promise<string> {
           if (ctx) {
             await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
             const pageOcrText = await extractImageTextWithOCR(canvas);
-            if (pageOcrText.trim()) {
-              ocrPages.push(pageOcrText.trim());
+            const combinedPage = [cleanedPage.trim(), pageOcrText.trim()].filter(Boolean).join('\n');
+            if (combinedPage.length > 0) {
+              pageTexts.push(combinedPage);
             }
+          } else if (cleanedPage.trim().length > 0) {
+            pageTexts.push(cleanedPage.trim());
           }
         } catch {
-          // Ignore single page render failure
+          if (cleanedPage.trim().length > 0) {
+            pageTexts.push(cleanedPage.trim());
+          }
         }
+      } else if (cleanedPage.trim().length > 0) {
+        pageTexts.push(cleanedPage.trim());
       }
-      const combinedOcr = sanitizeAcademicText(ocrPages.join('\n\n'));
-      if (combinedOcr.length >= 20) {
-        return combinedOcr;
-      }
+    }
+
+    const fullDigitalText = sanitizeAcademicText(pageTexts.join('\n\n'));
+    if (fullDigitalText.length >= 20 && !isBinaryGarbage(fullDigitalText)) {
+      return fullDigitalText;
     }
   } catch (err) {
     console.warn('pdfjs extraction fallback triggered:', err);

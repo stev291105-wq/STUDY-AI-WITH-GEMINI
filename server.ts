@@ -3,9 +3,13 @@ import type { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
-import { generateFallbackQuestions, PRESET_SAMPLE_DOCUMENTS } from './src/utils/quizEngine.ts';
-import { buildLocalDocAnalysis } from './src/utils/documentParser.ts';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import {
+  generateFallbackQuestions,
+  PRESET_SAMPLE_DOCUMENTS,
+  sanitizeAndValidateQuestions,
+} from './src/utils/quizEngine.ts';
+import { buildLocalDocAnalysis, cleanExtractedText } from './src/utils/documentParser.ts';
 
 dotenv.config();
 
@@ -32,6 +36,45 @@ if (apiKey && !isPlaceholderKey) {
       },
     },
   });
+}
+
+const SERVER_CANDIDATE_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3-flash-preview',
+  'gemini-2.5-flash-lite',
+  'gemini-3.1-flash-lite',
+];
+
+async function callServerGeminiWithFallback(
+  client: GoogleGenAI,
+  models: string[],
+  buildParams: (model: string) => Parameters<GoogleGenAI['models']['generateContent']>[0]
+) {
+  let lastError: any = null;
+  for (const model of models) {
+    try {
+      const response = await client.models.generateContent(buildParams(model));
+      if (response && response.text) {
+        return { response, modelUsed: model };
+      }
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || String(err);
+      if (
+        msg.includes('404') ||
+        msg.includes('NOT_FOUND') ||
+        msg.includes('not found') ||
+        msg.includes('no longer available') ||
+        msg.includes('403') ||
+        msg.includes('PERMISSION_DENIED')
+      ) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error('No se encontró un modelo disponible en el entorno.');
 }
 
 // 1. Health & Config endpoint
@@ -90,10 +133,7 @@ app.post('/api/test-provider-key', async (req: Request, res: Response) => {
       const customAi = new GoogleGenAI({ apiKey: apiKey.trim() });
       const candidates = [
         model && model !== 'gemini-2.5-flash' ? model : 'gemini-flash-latest',
-        'gemini-3-flash-preview',
-        'gemini-3.8-flash',
-        'gemini-2.5-flash-lite',
-        'gemini-3.1-flash-lite',
+        ...SERVER_CANDIDATE_MODELS,
       ];
       let lastErr = '';
       for (const candidate of candidates) {
@@ -159,99 +199,99 @@ app.post('/api/analyze-multimodal', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Falta la información del documento.' });
     }
 
+    const cleanedDocText = cleanExtractedText(doc.rawText || '');
+
     // MODO ESTUDIO SIN IA: Procesamiento completamente local sin llamadas externas
     if (engineMode === 'no_ai') {
-      const localAnalysis = buildLocalDocAnalysis(doc);
+      const localAnalysis = buildLocalDocAnalysis({ ...doc, rawText: cleanedDocText });
       return res.json({
         success: true,
         modeUsed: 'no_ai',
         analysis: localAnalysis,
-        extractedText: doc.rawText || '',
+        extractedText: cleanedDocText,
       });
     }
 
-    // MODO CON IA (Gemini Entorno)
+    // MODO CON IA (Gemini Entorno del Creador)
     if (engineMode === 'gemini_env' && ai) {
       const parts: any[] = [];
       if (doc.base64Data && doc.mimeType) {
         const cleanBase64 = doc.base64Data.replace(/^data:[^;]+;base64,/, '');
+        const resolvedMime =
+          doc.mimeType === 'application/octet-stream' && doc.category === 'pdf'
+            ? 'application/pdf'
+            : doc.mimeType;
         parts.push({
           inlineData: {
             data: cleanBase64,
-            mimeType: doc.mimeType,
+            mimeType: resolvedMime,
           },
         });
       }
 
       const promptText = `Eres un experto en EdTech y Visión por Computadora multimodal con OCR y HTR (Handwritten Text Recognition).
-Analiza este documento ("${doc.name}") de estudio. Extrae con precisión:
-1. Texto digital nativo y fórmulas.
+Analiza este documento ("${doc.name}") de estudio. Extrae con precisión todo su contenido real:
+1. Texto digital nativo, conceptos, títulos temáticos y fórmulas.
 2. Reconocimiento de texto escrito a mano (HTR) de pizarras, cuadernos o notas al margen.
-3. Texto y relaciones dentro de diagramas, infografías (Canva/PPTX) o gráficos.
+3. Texto y relaciones dentro de diagramas, infografías (Canva/PPTX), gráficos o imágenes incrustadas en el documento.
 Responde estrictamente en formato JSON con la siguiente estructura:
 {
   "summary": "Resumen conciso en español de los puntos clave para estudiar",
-  "keyThemes": ["Concepto 1", "Concepto 2", "Concepto 3", "Concepto 4"],
+  "keyThemes": ["Tema o Concepto 1", "Tema o Concepto 2", "Tema o Concepto 3", "Tema o Concepto 4"],
   "hasHandwriting": true o false,
   "handwrittenNotes": ["Anotación manuscrita detectada 1", ...],
   "diagramDescriptions": ["Descripción de esquemas o diagramas detectados", ...],
   "multimodalNotes": "Observación sobre el análisis OCR/HTR visual",
-  "extractedText": "Texto completo extraído o transcripción integral"
+  "extractedText": "Transcripción completa, limpia y estructurada por temas de todo el contenido del documento"
 }
-Texto previo o metadatos aportados: ${doc.rawText ? doc.rawText.slice(0, 3000) : 'Sin texto previo'}`;
+Texto previo extraído del archivo: ${cleanedDocText ? cleanedDocText.slice(0, 6000) : 'Extraer directamente desde el archivo adjunto'}`;
 
       parts.push({ text: promptText });
 
       try {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+        const { response } = await callServerGeminiWithFallback(ai, SERVER_CANDIDATE_MODELS, (model) => ({
+          model,
           contents: { parts },
           config: {
             responseMimeType: 'application/json',
           },
-        });
+        }));
 
         const textOutput = response.text?.trim() || '{}';
         const parsed = JSON.parse(textOutput);
+        const finalExtracted = cleanExtractedText(parsed.extractedText || cleanedDocText || '');
         return res.json({
           success: true,
           modeUsed: 'gemini_env',
           analysis: {
-            summary: parsed.summary || 'Documento analizado con éxito.',
-            keyThemes: parsed.keyThemes || ['Conceptos clave'],
+            summary: cleanExtractedText(parsed.summary || '') || 'Documento analizado con éxito.',
+            keyThemes: Array.isArray(parsed.keyThemes)
+              ? parsed.keyThemes.map((t: string) => cleanExtractedText(t)).filter(Boolean)
+              : ['Conceptos clave'],
             hasHandwriting: Boolean(parsed.hasHandwriting),
-            handwrittenNotes: parsed.handwrittenNotes || [],
-            diagramDescriptions: parsed.diagramDescriptions || [],
+            handwrittenNotes: Array.isArray(parsed.handwrittenNotes)
+              ? parsed.handwrittenNotes.map((n: string) => cleanExtractedText(n)).filter(Boolean)
+              : [],
+            diagramDescriptions: Array.isArray(parsed.diagramDescriptions)
+              ? parsed.diagramDescriptions.map((d: string) => cleanExtractedText(d)).filter(Boolean)
+              : [],
             multimodalNotes: parsed.multimodalNotes || 'Procesado mediante Gemini Multimodal OCR/HTR.',
-            wordCount: (parsed.extractedText || doc.rawText || '').split(/\s+/).length,
+            wordCount: finalExtracted.split(/\s+/).filter(Boolean).length,
           },
-          extractedText: parsed.extractedText || doc.rawText,
+          extractedText: finalExtracted,
         });
       } catch (geminiError) {
         console.warn('Gemini OCR API error, using smart local parser:', geminiError);
       }
     }
 
-    // Default fallback
-    const hasHandwritingClue = /apunte|mano|cuaderno|pizarra|manuscrito|htr|caligrafia/i.test(doc.name) ||
-      (doc.rawText && /manuscrito|a mano|al margen|lapiz|cuaderno/i.test(doc.rawText));
-    const wordCount = (doc.rawText || '').split(/\s+/).filter(Boolean).length || 120;
-
+    // Smart local fallback using actual cleaned text
+    const localAnalysis = buildLocalDocAnalysis({ ...doc, rawText: cleanedDocText });
     return res.json({
       success: true,
       modeUsed: engineMode,
-      analysis: {
-        summary: `Documento "${doc.name}" analizado con éxito para evaluación interactiva.`,
-        keyThemes: ['Análisis conceptual', 'Definiciones clave', 'Relaciones temáticas'],
-        hasHandwriting: Boolean(hasHandwritingClue),
-        handwrittenNotes: hasHandwritingClue
-          ? ['Anotación manuscrita detectada en apuntes para examen.']
-          : [],
-        diagramDescriptions: ['Esquema conceptual y flujo temático integrado.'],
-        multimodalNotes: 'Análisis OCR y HTR completado.',
-        wordCount,
-      },
-      extractedText: doc.rawText || `Contenido de estudio extraído del archivo ${doc.name}.`,
+      analysis: localAnalysis,
+      extractedText: cleanedDocText,
     });
   } catch (error: any) {
     console.error('Error analyzing document:', error);
@@ -267,11 +307,12 @@ app.post('/api/generate-questions', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Documentos y configuración son requeridos.' });
     }
 
+    const activeDocs = Array.isArray(docs) && docs.length > 0 ? docs : PRESET_SAMPLE_DOCUMENTS;
     const { selectedModalities, difficulty, questionCount, engineMode = 'gemini_env', customConfig } = config;
 
     // FORMA 1: MODO ESTUDIO SIN IA (Demo local sin ninguna IA)
     if (engineMode === 'no_ai') {
-      const fallbackQuestions = generateFallbackQuestions(docs.length > 0 ? docs : PRESET_SAMPLE_DOCUMENTS, config);
+      const fallbackQuestions = generateFallbackQuestions(activeDocs, config);
       return res.json({
         success: true,
         modeUsed: 'no_ai',
@@ -281,61 +322,111 @@ app.post('/api/generate-questions', async (req: Request, res: Response) => {
     }
 
     const isJacqueline = difficulty === 'jacqueline';
+    const allowedDocNames = activeDocs.map((d: any) => `"${d.name}"`).join(', ');
 
-    // Context from docs
-    const docsContext = docs
-      .map((d: any, idx: number) => `--- DOCUMENTO ${idx + 1}: ${d.name} (${d.category}) ---
-${d.analysis?.summary ? `Resumen: ${d.analysis.summary}` : ''}
+    // Sanitize all document text before building context
+    const docsContext = activeDocs
+      .map((d: any, idx: number) => {
+        const cleanRaw = cleanExtractedText(d.rawText || d.extractedText || '');
+        return `--- DOCUMENTO ${idx + 1}: "${d.name}" (${d.category}) ---
+${d.analysis?.summary ? `Resumen: ${cleanExtractedText(d.analysis.summary)}` : ''}
+${d.analysis?.keyThemes?.length ? `Temas clave: ${d.analysis.keyThemes.join(', ')}` : ''}
 ${d.analysis?.handwrittenNotes?.length ? `Notas manuscritas (HTR): ${d.analysis.handwrittenNotes.join('; ')}` : ''}
 ${d.analysis?.diagramDescriptions?.length ? `Diagramas/Esquemas: ${d.analysis.diagramDescriptions.join('; ')}` : ''}
-Texto/Contenido:
-${(d.rawText || d.extractedText || '').slice(0, 6000)}
-`)
+Texto/Contenido limpio del documento:
+${cleanRaw.slice(0, 12000)}
+`;
+      })
       .join('\n\n');
 
     const systemPrompt = `Eres StudyMaster AI, un generador pedagógico de cuestionarios de alta precisión para EdTech.
-Genera exactamente ${questionCount} preguntas basadas exclusivamente en el material proporcionado.
+Genera exactamente ${questionCount} preguntas basadas ÚNICA Y EXCLUSIVAMENTE en los documentos proporcionados (${allowedDocNames}).
+
+REGLAS ESTRICTAS DE CONTENIDO Y TEMÁTICA:
+- Prohibido inventar preguntas fuera de los documentos proporcionados (${allowedDocNames}).
+- El campo "sourceDocName" DEBE coincidir exactamente con el nombre del documento fuente (${allowedDocNames}).
+- El campo "topicTitle" es OBLIGATORIO en cada pregunta y debe indicar el TÍTULO DE LA TEMÁTICA o apartado específico al que corresponde la pregunta según el documento (ej. "Psicodiagnóstico y Entrevista Clínica", "Principio Pro Persona", etc.).
+- Todas las preguntas, opciones y respuestas deben tener sentido lógico, gramatical y pedagógico completo en español. Prohibido usar opciones genéricas como "Ninguno de los conceptos citados" o palabras truncadas.
 
 REGLAS DE MODALIDADES (Sólo usa estas modalidades permitidas: ${selectedModalities.join(', ')}):
-1. 'multiple_choice': 4 opciones plausibles (A, B, C, D). Solo 1 respuesta correcta.
-2. 'true_false': Afirmación clara. Opciones: ["Verdadero", "Falso"].
-3. 'fill_blank': Oración clave donde se omite un concepto fundamental (fillInContext con sentenceBefore, targetWord, sentenceAfter).
-4. 'open_question': Pregunta de desarrollo que exige sintetizar o justificar un punto del texto con officialAnswer detallada.
+1. 'multiple_choice': Pregunta clara con 4 opciones plausibles y coherentes (solo 1 correcta, "correctAnswer" debe ser idéntica a una de las 4 opciones).
+2. 'true_false': Afirmación clara y con sentido completo sobre el documento. Opciones: ["Verdadero", "Falso"]. "correctAnswer": "Verdadero" o "Falso".
+3. 'fill_blank': Oración clave del documento donde se omite un concepto fundamental ("fillInContext" con "sentenceBefore", "targetWord", "sentenceAfter", y "correctAnswer" igual a "targetWord").
+4. 'open_question': Pregunta de desarrollo que exige sintetizar o explicar un punto del texto con "officialAnswer" detallada.
 
 NIVEL DE DIFICULTAD ACTIVO: "${difficulty.toUpperCase()}".
 ${
   isJacqueline
     ? `🔥 ATENCIÓN: ESTE ES EL NIVEL "JACQUELINE (NIVEL MAESTRO / EXTREMO)".
-Las preguntas deben ser ultra-específicas, altamente técnicas, de correlación cruzada entre documentos y detalles milimétricos.`
+Las preguntas deben ser ultra-específicas, altamente técnicas, de correlación conceptual rigurosa y detalles precisos del documento.`
     : difficulty === 'dificil'
-    ? 'Preguntas de análisis profundo, inferencia compleja y aplicación práctica.'
+    ? 'Preguntas de análisis profundo, inferencia compleja y aplicación práctica del documento.'
     : difficulty === 'medio'
-    ? 'Preguntas de comprensión y relación de conceptos.'
-    : 'Preguntas directas sobre conceptos básicos y definiciones literales.'
+    ? 'Preguntas de comprensión y relación de conceptos del documento.'
+    : 'Preguntas directas sobre conceptos básicos y definiciones literales del documento.'
 }
 
-Devuelve ÚNICAMENTE un array JSON con las preguntas (id, type, difficulty, prompt, options, correctAnswer, fillInContext, officialAnswer, explanation, sourceDocName).`;
+Devuelve ÚNICAMENTE un array JSON con las preguntas (id, type, difficulty, topicTitle, prompt, options, correctAnswer, fillInContext, officialAnswer, explanation, sourceDocName).`;
+
+    // Build multimodal parts (attaching inlineData for PDFs and images so Gemini reads visual text and diagrams directly)
+    const buildMultimodalParts = () => {
+      const parts: any[] = [];
+      for (const d of activeDocs) {
+        if (d.base64Data && d.mimeType && (d.category === 'image' || d.category === 'canva' || d.category === 'pdf')) {
+          const cleanBase64 = d.base64Data.replace(/^data:[^;]+;base64,/, '');
+          if (cleanBase64.length < 18 * 1024 * 1024) {
+            parts.push({
+              inlineData: {
+                data: cleanBase64,
+                mimeType:
+                  d.mimeType === 'application/octet-stream' && d.category === 'pdf'
+                    ? 'application/pdf'
+                    : d.mimeType,
+              },
+            });
+          }
+        }
+      }
+      parts.push({ text: `${systemPrompt}\n\nMATERIALES DE ESTUDIO:\n${docsContext}` });
+      return parts;
+    };
 
     // FORMA 3: MODO CON CLAVES EXTERNAS (Grok, Llama, OpenAI, o Gemini Custom Key)
     if (engineMode === 'custom_keys' && customConfig?.apiKey) {
       try {
-        const { provider, apiKey, model, baseUrl } = customConfig;
+        const { provider, apiKey: customKey, model, baseUrl } = customConfig;
 
         if (provider === 'gemini') {
-          const customAi = new GoogleGenAI({ apiKey });
-          const genModel = model || (isJacqueline ? 'gemini-4-argon' : 'gemini-3.8-flash');
-          const response = await customAi.models.generateContent({
-            model: genModel,
-            contents: `${systemPrompt}\n\nMATERIALES DE ESTUDIO:\n${docsContext}`,
-            config: {
-              ...(isJacqueline && genModel === 'gemini-4-argon' ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } } : {}),
-              responseMimeType: 'application/json',
-            },
+          const customAi = new GoogleGenAI({ apiKey: customKey });
+          const candidateModels = model
+            ? [model, ...SERVER_CANDIDATE_MODELS]
+            : isJacqueline
+            ? ['gemini-4-argon', ...SERVER_CANDIDATE_MODELS]
+            : SERVER_CANDIDATE_MODELS;
+          const parts = buildMultimodalParts();
+          const { response, modelUsed } = await callServerGeminiWithFallback(
+            customAi,
+            candidateModels,
+            (m) => ({
+              model: m,
+              contents: { parts },
+              config: {
+                ...(isJacqueline && m === 'gemini-4-argon'
+                  ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } }
+                  : {}),
+                responseMimeType: 'application/json',
+              },
+            })
+          );
+          const parsed = JSON.parse(response.text?.trim() || '[]');
+          const rawList = Array.isArray(parsed) ? parsed : parsed.questions || [];
+          const questions = sanitizeAndValidateQuestions(rawList, activeDocs, config);
+          return res.json({
+            success: true,
+            modeUsed: 'custom_keys',
+            providerName: `Gemini (${modelUsed})`,
+            questions,
           });
-          const questions = JSON.parse(response.text?.trim() || '[]');
-          if (Array.isArray(questions) && questions.length > 0) {
-            return res.json({ success: true, modeUsed: 'custom_keys', providerName: `Gemini (${genModel})`, questions });
-          }
         } else {
           // OpenAI, Grok (xAI), or Groq/Llama
           let endpoint = baseUrl;
@@ -350,61 +441,61 @@ Devuelve ÚNICAMENTE un array JSON con las preguntas (id, type, difficulty, prom
 
           const rawJson = await callOpenAICompatible(
             endpoint,
-            apiKey,
+            customKey,
             chosenModel,
             systemPrompt,
             `Genera el cuestionario en formato JSON con la clave "questions": [...] a partir de estos documentos:\n\n${docsContext}`
           );
 
-          let parsed = JSON.parse(rawJson);
-          let questions = Array.isArray(parsed) ? parsed : parsed.questions || parsed.cuestionario || [];
-          if (Array.isArray(questions) && questions.length > 0) {
-            return res.json({ success: true, modeUsed: 'custom_keys', providerName: `${provider.toUpperCase()} (${chosenModel})`, questions });
-          }
+          const parsed = JSON.parse(rawJson);
+          const rawList = Array.isArray(parsed) ? parsed : parsed.questions || parsed.cuestionario || [];
+          const questions = sanitizeAndValidateQuestions(rawList, activeDocs, config);
+          return res.json({
+            success: true,
+            modeUsed: 'custom_keys',
+            providerName: `${provider.toUpperCase()} (${chosenModel})`,
+            questions,
+          });
         }
       } catch (customError: any) {
         console.warn('Custom Provider error, falling back to engine:', customError.message);
       }
     }
 
-    // FORMA 2: MODO CON IA (API KEY de este entorno de Gemini)
+    // FORMA 2: MODO CON IA (API KEY del entorno del creador)
     if (ai) {
       try {
-        let textOutput = '';
-        if (isJacqueline) {
-          const response = await ai.models.generateContent({
-            model: 'gemini-4-argon',
-            contents: `${systemPrompt}\n\nMATERIALES DE ESTUDIO:\n${docsContext}`,
-            config: {
-              thinkingConfig: {
-                thinkingLevel: ThinkingLevel.HIGH,
-              },
-              responseMimeType: 'application/json',
-            },
-          });
-          textOutput = response.text?.trim() || '[]';
-        } else {
-          const response = await ai.models.generateContent({
-            model: 'gemini-3.8-flash',
-            contents: `${systemPrompt}\n\nMATERIALES DE ESTUDIO:\n${docsContext}`,
-            config: {
-              responseMimeType: 'application/json',
-            },
-          });
-          textOutput = response.text?.trim() || '[]';
-        }
+        const candidateModels = isJacqueline
+          ? ['gemini-4-argon', ...SERVER_CANDIDATE_MODELS]
+          : SERVER_CANDIDATE_MODELS;
+        const parts = buildMultimodalParts();
+        const { response, modelUsed } = await callServerGeminiWithFallback(ai, candidateModels, (m) => ({
+          model: m,
+          contents: { parts },
+          config: {
+            ...(isJacqueline && m === 'gemini-4-argon'
+              ? { thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH } }
+              : {}),
+            responseMimeType: 'application/json',
+          },
+        }));
 
-        const questions = JSON.parse(textOutput);
-        if (Array.isArray(questions) && questions.length > 0) {
-          return res.json({ success: true, modeUsed: 'gemini_env', providerName: 'Gemini (Entorno Activo)', questions });
-        }
+        const parsed = JSON.parse(response.text?.trim() || '[]');
+        const rawList = Array.isArray(parsed) ? parsed : parsed.questions || [];
+        const questions = sanitizeAndValidateQuestions(rawList, activeDocs, config);
+        return res.json({
+          success: true,
+          modeUsed: 'gemini_env',
+          providerName: `Gemini (${modelUsed})`,
+          questions,
+        });
       } catch (geminiGenError) {
         console.warn('Gemini generation error, falling back to engine:', geminiGenError);
       }
     }
 
-    // Heuristic fallback generator
-    const fallbackQuestions = generateFallbackQuestions(docs.length > 0 ? docs : PRESET_SAMPLE_DOCUMENTS, config);
+    // Heuristic fallback generator (strictly sanitized and validated from activeDocs)
+    const fallbackQuestions = generateFallbackQuestions(activeDocs, config);
     return res.json({
       success: true,
       modeUsed: engineMode,

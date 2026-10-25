@@ -304,8 +304,21 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
           </div>
         </div>
 
-        {/* Question Prompt */}
-        <div>
+        {/* Thematic Title + Question Prompt */}
+        <div className="space-y-3">
+          <div
+            data-testid="question-topic-title"
+            className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 text-indigo-800 dark:text-indigo-200 text-xs sm:text-sm font-extrabold tracking-tight"
+          >
+            <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>
+              Temática:{' '}
+              <span className="text-indigo-950 dark:text-white">
+                {currentQuestion.topicTitle || currentQuestion.sourceSection || 'Conceptos Centrales del Documento'}
+              </span>
+            </span>
+          </div>
+
           <h3 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white leading-relaxed">
             {currentQuestion.prompt}
           </h3>

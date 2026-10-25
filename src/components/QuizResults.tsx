@@ -336,7 +336,7 @@ export const QuizResults: React.FC<QuizResultsProps> = ({
                         )}
                       </div>
 
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-extrabold text-xs text-slate-500 dark:text-slate-400">
                             #{index + 1}
@@ -344,8 +344,11 @@ export const QuizResults: React.FC<QuizResultsProps> = ({
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             {getModalityName(question.type)}
                           </span>
+                          <span className="px-2.5 py-0.5 rounded-md text-[11px] font-extrabold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            Temática: {question.topicTitle || question.sourceSection || 'Conceptos Centrales del Documento'}
+                          </span>
                           <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                            {question.sourceDocName}
+                            • {question.sourceDocName}
                           </span>
                         </div>
 

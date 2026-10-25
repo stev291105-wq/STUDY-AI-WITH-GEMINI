@@ -57,6 +57,7 @@ export interface Question {
   id: string;
   type: QuestionModality;
   difficulty: DifficultyLevel;
+  topicTitle?: string;
   prompt: string;
   // Multiple Choice or True/False
   options?: string[];

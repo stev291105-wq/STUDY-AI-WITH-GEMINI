@@ -22,7 +22,12 @@ import {
   CustomAIConfig,
   VisitorGeminiState
 } from './types';
-import { PRESET_SAMPLE_DOCUMENTS, generateFallbackQuestions, calculateQuizSummary } from './utils/quizEngine';
+import {
+  PRESET_SAMPLE_DOCUMENTS,
+  generateFallbackQuestions,
+  calculateQuizSummary,
+  sanitizeAndValidateQuestions
+} from './utils/quizEngine';
 import {
   getSavedVisitorKey,
   analyzeVisitorDocWithGemini,
@@ -52,8 +57,8 @@ export default function App() {
   // Main application state
   const [appState, setAppState] = useState<'setup' | 'playing' | 'results'>('setup');
 
-  // Documents: Seed with rich presets so the user can test all modalities immediately!
-  const [documents, setDocuments] = useState<UploadedDoc[]>(PRESET_SAMPLE_DOCUMENTS);
+  // Documents: Start empty so the user can immediately upload their own study materials without preloaded demo files
+  const [documents, setDocuments] = useState<UploadedDoc[]>([]);
 
   // Visitor Gemini Account State (Client-Side Only, never sent to server)
   const [visitorState, setVisitorState] = useState<VisitorGeminiState>(() => {
@@ -223,10 +228,10 @@ export default function App() {
 
   // Start Quiz generator
   const handleStartQuiz = async () => {
-    const activeDocs = documents.length > 0 ? documents : PRESET_SAMPLE_DOCUMENTS;
     if (documents.length === 0) {
-      setDocuments(PRESET_SAMPLE_DOCUMENTS);
+      return;
     }
+    const activeDocs = documents;
 
     setAppQuotaMessage('');
 
@@ -278,7 +283,7 @@ export default function App() {
           visitorState.apiKey,
           visitorState.model
         );
-        setQuestions(generated);
+        setQuestions(sanitizeAndValidateQuestions(generated, enrichedDocs, config));
         setCurrentIndex(0);
         setAnswers({});
         setQuizStartTime(Date.now());
@@ -300,7 +305,7 @@ export default function App() {
       return;
     }
 
-    // Case 2: Server-side Gemini or Custom Keys
+    // Case 2: Server-side Gemini (IA del entorno del creador) or Custom Keys
     setIsGenerating(true);
     try {
       const res = await fetch('/api/generate-questions', {
@@ -315,7 +320,7 @@ export default function App() {
       const data = await res.json();
 
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
-        setQuestions(data.questions);
+        setQuestions(sanitizeAndValidateQuestions(data.questions, activeDocs, config));
       } else {
         const fallback = generateFallbackQuestions(activeDocs, config);
         setQuestions(fallback);
