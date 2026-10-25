@@ -387,33 +387,48 @@ ${cleanRaw.slice(0, 12000)}
 
   const allowedDocNames = docs.map(d => `"${d.name}"`).join(', ');
 
-  const systemPrompt = `Eres StudyMaster AI, un generador pedagógico de cuestionarios de alta precisión.
-Genera exactamente ${config.questionCount} preguntas basadas ÚNICA Y EXCLUSIVAMENTE en el contenido de los documentos subidos en esta sesión (${allowedDocNames}).
+  const variationNonce = Date.now() % 10000;
+  const difficultyProfileInstructions =
+    config.difficulty === 'jacqueline'
+      ? `🔥 NIVEL ACTIVO: "JACQUELINE (NIVEL MAESTRO / EXTREMO)"
+- PROHIBIDO hacer preguntas simples o idénticas al modo Difícil (POVEDA).
+- Exige SÍNTESIS INTEGRADORA CRUZADA: cada pregunta debe correlacionar al menos 2 conceptos, mecanismos o secciones distintas del documento.
+- En 'multiple_choice' y 'true_false', utiliza proposiciones compuestas de doble cláusula (Premisa I + Premisa II) donde las opciones incorrectas sean trampas académicas sutiles (ej. la primera mitad del enunciado es verdadera pero la segunda mitad invierte una condición clave).`
+      : config.difficulty === 'dificil'
+      ? `⚡ NIVEL ACTIVO: "DIFÍCIL (POVEDA) — RIGOR ANALÍTICO Y EXCEPCIONES"
+- Aplica el estándar de evaluación exigente POVEDA: evalúa condiciones técnicas necesarias, discriminación fina de mecanismos y detección de errores conceptuales.
+- Incluye preguntas de análisis de excepción ("¿Cuál de las siguientes afirmaciones sobre [Subtema] constituye un ERROR conceptual o es FALSA?", donde 3 opciones son verdaderas y 1 es falsa) y preguntas sobre qué condición específica valida o invalida un proceso.`
+      : config.difficulty === 'medio'
+      ? `📘 NIVEL ACTIVO: "MEDIO — COMPRENSIÓN FUNCIONAL Y MECANISMOS"
+- Evalúa cómo funcionan los procesos (¿mediante qué mecanismo o vía?), con qué finalidad se realizan (¿para qué sirve X en el contexto de Y?) y las relaciones causa-efecto dentro de cada tema.`
+      : `🟢 NIVEL ACTIVO: "FÁCIL — DEFINICIONES Y CONCEPTOS FUNDAMENTALES"
+- Evalúa la identificación directa y clara de definiciones esenciales, conceptos principales y características explícitas del documento.`;
 
-REGLA ESTRICTA DE EXCLUSIVIDAD Y CALIDAD PEDAGÓGICA:
-- Prohibido inventar preguntas sobre temas que NO aparezcan en los documentos listados abajo.
+  const systemPrompt = `Eres StudyMaster AI, un generador pedagógico de cuestionarios de alta precisión.
+Genera exactamente ${config.questionCount} preguntas variadas que cubran DIVERSAS TEMÁTICAS Y SECCIONES de todo el documento (inicio, desarrollo y cierre; jamás repitas siempre el mismo tema) basadas ÚNICA Y EXCLUSIVAMENTE en el contenido de los documentos subidos en esta sesión (${allowedDocNames}).
+Semilla de variación de sesión: #${variationNonce} (asegúrate de explorar ángulos, subtemas y formulaciones frescas y variadas).
+
+REGLA ESTRICTA DE CONTEXTO COMPLETO Y REDACCIÓN DIRECTA:
+- Cada pregunta DEBE especificar con total claridad y contexto qué se está preguntando exactamente y sobre qué sujeto/proceso (jamás hagas preguntas ambiguas o incompletas sin contexto).
+- Ve DIRECTAMENTE a la pregunta bien redactada o al enunciado completo.
+- PROHIBIDO iniciar las preguntas o las opciones con muletillas como "En la sección X del libro...", "En el apartado Y del manual...", "En la página Z...", "Según el documento...", "De acuerdo con el texto...".
+- Todas las preguntas y respuestas deben estar 100% completas (jamás recortadas a la mitad), bien redactadas y con lógica pedagógica impecable.
 - El campo "sourceDocName" DEBE ser exactamente uno de estos nombres: ${allowedDocNames}.
-- El campo "topicTitle" es OBLIGATORIO en cada pregunta y debe contener el TÍTULO DE LA TEMÁTICA o apartado específico del documento al que corresponde la pregunta (ej. "Entrevista Clínica y Psicodiagnóstico", "Evaluación Psicológica", etc.).
-- Todas las preguntas y respuestas deben tener sentido gramatical, coherencia lógica y rigor académico en español. Prohibido usar opciones genéricas como "Ninguno de los conceptos citados" o palabras cortadas.
+
+ENCABEZADO DOBLE OBLIGATORIO EN CADA PREGUNTA ("topicTitle" + "specificTopic"):
+- "topicTitle" (OBLIGATORIO): El TEMA PRINCIPAL general al que pertenece la pregunta (ej. "Psicodiagnóstico Clínico y Entrevista", "Respiración Celular Mitocondrial").
+- "specificTopic" (OBLIGATORIO): El SUBTEMA o CONCEPTO ESPECÍFICO puntual sobre el que se está preguntando en esta pregunta en particular (ej. "Objetivos de la entrevista semidirigida inicial", "Función del Complejo II en la membrana interna"). Cada pregunta del test debe abordar un "specificTopic" distinto.
 
 REGLAS DE MODALIDADES (Usa únicamente estas modalidades seleccionadas: ${config.selectedModalities.join(', ')}):
-1. 'multiple_choice': Pregunta clara de comprensión/análisis con 4 opciones plausibles basadas en el documento. Solo 1 respuesta correcta ("correctAnswer" debe ser idéntica a una de las 4 opciones).
-2. 'true_false': Afirmación clara y con sentido completo sobre el documento. Opciones: ["Verdadero", "Falso"]. "correctAnswer": "Verdadero" o "Falso".
-3. 'fill_blank': Oración clave del documento donde se omite un concepto fundamental ("fillInContext" con "sentenceBefore", "targetWord", "sentenceAfter", y "correctAnswer" igual a "targetWord").
-4. 'open_question': Pregunta de desarrollo sobre el documento con "officialAnswer" detallada extraída del documento.
+1. 'multiple_choice': Pregunta directa y contextualizada con 4 opciones plausibles, completas y bien redactadas. Solo 1 respuesta correcta ("correctAnswer" debe ser idéntica a una de las 4 opciones).
+2. 'true_false': Proposición directa, completa y con sentido propio. Opciones: ["Verdadero", "Falso"]. "correctAnswer": "Verdadero" o "Falso".
+3. 'fill_blank': Instrucción clara en "prompt" y oración completa con contexto lógico en "fillInContext" ("sentenceBefore", "targetWord", "sentenceAfter", y "correctAnswer" igual a "targetWord").
+4. 'open_question': Pregunta abierta directa, contextualizada y analítica con "officialAnswer" completa y "explanation" pedagógica detallada.
 
-NIVEL DE DIFICULTAD ACTIVO: "${config.difficulty.toUpperCase()}".
-${
-  isJacqueline
-    ? '🔥 NIVEL JACQUELINE (EXTREMO): Preguntas ultra-específicas, altamente técnicas y de detalles rigurosos del documento.'
-    : config.difficulty === 'dificil'
-    ? 'Preguntas de análisis profundo, inferencia compleja y aplicación práctica del documento.'
-    : config.difficulty === 'medio'
-    ? 'Preguntas de comprensión y relación de conceptos del documento.'
-    : 'Preguntas directas sobre conceptos básicos y definiciones literales del documento.'
-}
+DIFERENCIACIÓN ESTRICTA POR NIVEL DE DIFICULTAD:
+${difficultyProfileInstructions}
 
-Devuelve ÚNICAMENTE un array JSON válido con objetos que tengan: id, type, difficulty, topicTitle, prompt, options, correctAnswer, fillInContext, officialAnswer, explanation, sourceDocName.`;
+Devuelve ÚNICAMENTE un array JSON válido con objetos que tengan: id, type, difficulty, topicTitle, specificTopic, prompt, options, correctAnswer, fillInContext, officialAnswer, explanation, sourceDocName.`;
 
   try {
     // Attach inlineData for uploaded PDF/image documents so Gemini reads visual text, tables, and embedded images directly

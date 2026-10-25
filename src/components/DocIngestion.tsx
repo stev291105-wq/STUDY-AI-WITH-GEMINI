@@ -31,16 +31,72 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
   const [selectedPreviewDoc, setSelectedPreviewDoc] = useState<UploadedDoc | null>(null);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [extractingStatus, setExtractingStatus] = useState<string>('');
+  const [pastedTitle, setPastedTitle] = useState<string>('');
+  const [pastedText, setPastedText] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const getDocCategory = (filename: string): UploadedDoc['category'] => {
     const ext = filename.split('.').pop()?.toLowerCase() || '';
+    if (['txt', 'md'].includes(ext)) return 'text';
     if (['pdf'].includes(ext)) return 'pdf';
     if (['doc', 'docx', 'gdoc', 'odt', 'rtf'].includes(ext)) return 'word';
     if (['ppt', 'pptx'].includes(ext)) return 'powerpoint';
     if (['png', 'jpg', 'jpeg', 'webp', 'bmp', 'heic'].includes(ext)) return 'image';
     if (filename.toLowerCase().includes('canva')) return 'canva';
     return 'other';
+  };
+
+  const handleAddPastedText = async () => {
+    const trimmed = pastedText.trim();
+    if (!trimmed) return;
+
+    const pastedIndex = documents.filter(d => d.category === 'text').length + 1;
+    let finalTitle = pastedTitle.trim();
+    if (!finalTitle) {
+      const firstLine = trimmed
+        .split(/\r?\n/)
+        .map(l => l.replace(/^[#*\-•>\s]+/, '').trim())
+        .find(l => l.length > 0);
+      if (firstLine && firstLine.length >= 3 && firstLine.length <= 72 && !/[.?!]$/.test(firstLine)) {
+        finalTitle = firstLine;
+      } else {
+        finalTitle = `Texto pegado ${pastedIndex}`;
+      }
+    }
+
+    const docId = `doc-txt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const byteSize = new Blob([trimmed]).size;
+
+    const initialAnalysis = buildLocalDocAnalysis({
+      name: finalTitle,
+      category: 'text',
+      rawText: trimmed,
+    });
+
+    const newDoc: UploadedDoc = {
+      id: docId,
+      name: finalTitle,
+      size: byteSize,
+      type: 'text/plain',
+      extension: '.txt',
+      category: 'text',
+      rawText: trimmed,
+      mimeType: 'text/plain',
+      status: 'ready',
+      selected: true,
+      analysis: initialAnalysis,
+    };
+
+    setPastedTitle('');
+    setPastedText('');
+
+    setDocuments(prev => {
+      const userOnlyDocs = prev.filter(d => !d.id.startsWith('sample-doc-'));
+      return [...userOnlyDocs, newDoc];
+    });
+
+    setSelectedPreviewDoc(newDoc);
+    await onAnalyzeDoc(newDoc);
   };
 
   const processFiles = async (files: FileList | File[]) => {
@@ -90,6 +146,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
         base64Data,
         mimeType: file.type || 'application/octet-stream',
         status: 'ready',
+        selected: true,
         analysis: initialAnalysis,
       };
 
@@ -113,6 +170,13 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
     for (const doc of newDocs) {
       await onAnalyzeDoc(doc);
     }
+  };
+
+  const handleToggleSelectDoc = (docId: string, e: React.MouseEvent | React.ChangeEvent) => {
+    e.stopPropagation();
+    setDocuments(prev =>
+      prev.map(d => (d.id === docId ? { ...d, selected: d.selected === false ? true : false } : d))
+    );
   };
 
   const handleUpdateDocText = (docId: string, newText: string) => {
@@ -185,6 +249,8 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
 
   const getCategoryBadge = (cat: UploadedDoc['category']) => {
     switch (cat) {
+      case 'text':
+        return { label: 'TXT', color: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700' };
       case 'pdf':
         return { label: 'PDF', color: 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border-rose-200 dark:border-rose-800' };
       case 'word':
@@ -200,6 +266,8 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
     }
   };
 
+  const selectedDocsCount = documents.filter(d => d.selected !== false).length;
+
   return (
     <div className="space-y-6">
       {/* Header and Callout */}
@@ -207,10 +275,10 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <FolderOpen className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
-            1. Ingesta de Documentos & OCR Multimodal
+            1. Sube tu material (Ingesta de Documentos & OCR Multimodal)
           </h2>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            Sube tus documentos o imágenes de estudio. Las preguntas en <strong>todos los modos (con o sin IA)</strong> se generarán <strong>exclusivamente</strong> de los archivos que subas aquí.
+            Sube tus documentos, imágenes o pega directamente tus apuntes. Las preguntas en <strong>todos los modos (con o sin IA)</strong> se generarán <strong>exclusivamente</strong> del material activo aquí.
           </p>
         </div>
 
@@ -288,20 +356,104 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
         </div>
       </div>
 
+      {/* Nueva Opción: Añadir texto (Justo debajo del cuadro de subir archivos) */}
+      <div
+        data-testid="add-text-section"
+        className="rounded-2xl border-2 border-emerald-300/90 dark:border-emerald-800/90 bg-gradient-to-br from-emerald-50/60 via-white to-slate-50 dark:from-emerald-950/25 dark:via-slate-900 dark:to-slate-900 p-5 sm:p-6 shadow-xs space-y-4"
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
+                Añadir texto
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Pega directamente tus apuntes, resúmenes o libros completos sin límite de extensión. Conserva títulos y secciones automáticamente.
+              </p>
+            </div>
+          </div>
+
+          {/* Cartel llamativo requerido */}
+          <div
+            data-testid="add-text-recommended-badge"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 via-amber-500 to-emerald-600 text-white text-[11px] sm:text-xs font-black tracking-wide shadow-sm uppercase leading-snug"
+          >
+            <span>⭐</span>
+            <span>
+              RECOMENDADO (SI USAS EL MODO DEMO SIN IA YA QUE EL TEXTO PEGADO AQUÍ SERÁ MÁS SIMPLE Y REQUIERE MENOS PROCESAMIENTO)
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="sm:col-span-2">
+            <label
+              htmlFor="pasted-doc-title"
+              className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1"
+            >
+              Título del material <span className="font-normal text-slate-500">(opcional — si se deja vacío se nombra con la primera línea o «Texto pegado 1, 2…»)</span>
+            </label>
+            <input
+              id="pasted-doc-title"
+              data-testid="pasted-text-title-input"
+              type="text"
+              value={pastedTitle}
+              onChange={(e) => setPastedTitle(e.target.value)}
+              placeholder="Ej. Resumen para el oral Psicodiagnóstico y Entrevista..."
+              className="w-full px-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs sm:text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="flex flex-col justify-end">
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 mb-1 px-1">
+              <span>Capacidad ilimitada</span>
+              <span data-testid="pasted-text-char-counter" className="font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                {pastedText.length.toLocaleString('es-ES')} caracteres
+              </span>
+            </div>
+            <button
+              type="button"
+              data-testid="add-pasted-text-btn"
+              onClick={handleAddPastedText}
+              disabled={!pastedText.trim()}
+              className="w-full py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-45 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <FileText className="w-4 h-4" />
+              <span>Añadir</span>
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <textarea
+            data-testid="pasted-text-textarea"
+            rows={5}
+            value={pastedText}
+            onChange={(e) => setPastedText(e.target.value)}
+            placeholder="Pega aquí cualquier cantidad de apuntes, resúmenes o libros completos (decenas o cientos de páginas). Se conservarán los títulos y apartados para detectar el tema principal y la referencia específica de cada pregunta..."
+            className="w-full p-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs sm:text-sm text-slate-800 dark:text-slate-200 leading-relaxed focus:ring-2 focus:ring-emerald-500 focus:outline-none resize-y"
+          />
+        </div>
+      </div>
+
       {/* Document Grid */}
       {documents.length > 0 && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
             <span>
-              DOCUMENTOS ACTIVOS PARA ESTA SESIÓN ({documents.length})
+              MATERIALES EN LA SESIÓN ({selectedDocsCount} seleccionados de {documents.length})
             </span>
-            <span>Haz clic en un documento para ver o editar su texto extraído</span>
+            <span>Marca o desmarca cada material para incluirlo en el test, o haz clic para ver su texto</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {documents.map(doc => {
               const badge = getCategoryBadge(doc.category);
               const isSelected = selectedPreviewDoc?.id === doc.id;
+              const isDocChecked = doc.selected !== false;
               const isEditing = editingDocId === doc.id;
 
               return (
@@ -309,13 +461,30 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                   key={doc.id}
                   onClick={() => setSelectedPreviewDoc(isSelected ? null : doc)}
                   className={`group relative p-4 rounded-xl border transition-all cursor-pointer ${
-                    isSelected
+                    !isDocChecked
+                      ? 'opacity-60 border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40'
+                      : isSelected
                       ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/40 dark:bg-indigo-950/30'
                       : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-indigo-300 dark:hover:border-indigo-700 shadow-sm'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
+                      <div
+                        onClick={(e) => handleToggleSelectDoc(doc.id, e)}
+                        className="pt-1 flex items-center"
+                        title={isDocChecked ? 'Incluido en el cuestionario (clic para deseleccionar)' : 'Excluido del cuestionario (clic para seleccionar)'}
+                      >
+                        <input
+                          type="checkbox"
+                          data-testid={`select-doc-${doc.id}`}
+                          checked={isDocChecked}
+                          onChange={(e) => handleToggleSelectDoc(doc.id, e)}
+                          aria-label={`Seleccionar documento ${doc.name}`}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </div>
+
                       <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 text-slate-600 dark:text-slate-300 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                         {doc.category === 'image' ? (
                           <ImageIcon className="w-5 h-5" />
@@ -331,7 +500,10 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                           {doc.name}
                         </h4>
                         <div className="flex items-center gap-2 mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${badge.color}`}>
+                          <span
+                            data-testid={`doc-badge-${doc.category}`}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border ${badge.color}`}
+                          >
                             {badge.label}
                           </span>
                           <span>{formatFileSize(doc.size)}</span>
@@ -360,9 +532,13 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold border border-emerald-200 dark:border-emerald-800">
                         <PenTool className="w-3 h-3 text-emerald-500" /> HTR: Manuscrito detectado
                       </span>
-                    ) : (
+                    ) : isDocChecked ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-[11px]">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Fuente activa para preguntas
+                        <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Seleccionado para el test
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-500 text-[11px]">
+                        Deseleccionado (no se incluirá)
                       </span>
                     )}
 

@@ -57,8 +57,33 @@ export default function App() {
   // Main application state
   const [appState, setAppState] = useState<'setup' | 'playing' | 'results'>('setup');
 
-  // Documents: Start empty so the user can immediately upload their own study materials without preloaded demo files
-  const [documents, setDocuments] = useState<UploadedDoc[]>([]);
+  // Documents: Start empty on a fresh session, or restore from current browser session history
+  const [documents, setDocuments] = useState<UploadedDoc[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const savedDocs = sessionStorage.getItem('studymaster_session_docs_v1');
+        if (savedDocs) {
+          const parsed = JSON.parse(savedDocs);
+          if (Array.isArray(parsed)) return parsed;
+        }
+      } catch {}
+    }
+    return [];
+  });
+
+  // Save documents in session history (sessionStorage)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const lightweightDocs = documents.map(d => ({
+          ...d,
+          // Avoid exceeding sessionStorage quota on huge binary images while keeping full rawText
+          base64Data: d.base64Data && d.base64Data.length > 350000 ? undefined : d.base64Data,
+        }));
+        sessionStorage.setItem('studymaster_session_docs_v1', JSON.stringify(lightweightDocs));
+      } catch {}
+    }
+  }, [documents]);
 
   // Visitor Gemini Account State (Client-Side Only, never sent to server)
   const [visitorState, setVisitorState] = useState<VisitorGeminiState>(() => {
@@ -228,10 +253,11 @@ export default function App() {
 
   // Start Quiz generator
   const handleStartQuiz = async () => {
-    if (documents.length === 0) {
+    const selectedDocs = documents.filter(d => d.selected !== false);
+    if (selectedDocs.length === 0) {
       return;
     }
-    const activeDocs = documents;
+    const activeDocs = selectedDocs;
 
     setAppQuotaMessage('');
 

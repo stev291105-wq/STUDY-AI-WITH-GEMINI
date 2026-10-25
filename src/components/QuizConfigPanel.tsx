@@ -96,29 +96,29 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
     {
       id: 'facil',
       label: 'Fácil',
-      subtitle: 'Definiciones Literales',
-      description: 'Preguntas directas sobre conceptos básicos y terminología explícita.',
+      subtitle: 'Definiciones y Base',
+      description: 'Identificación directa de conceptos fundamentales, definiciones esenciales y datos explícitos del documento.',
       badgeStyle: 'text-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-800'
     },
     {
       id: 'medio',
       label: 'Medio',
-      subtitle: 'Comprensión y Relación',
-      description: 'Comprensión de ideas secundarias, relaciones entre conceptos y aplicación estándar.',
+      subtitle: 'Mecanismos y Función',
+      description: 'Comprensión funcional de procesos, finalidades (¿para qué?), medios de acción y relaciones causa-efecto.',
       badgeStyle: 'text-blue-700 bg-blue-50 dark:bg-blue-950/60 border-blue-200 dark:border-blue-800'
     },
     {
       id: 'dificil',
-      label: 'Difícil',
-      subtitle: 'Análisis Profundo',
-      description: 'Preguntas de inferencia compleja, análisis crítico y casos prácticos rigurosos.',
+      label: 'Difícil (POVEDA)',
+      subtitle: 'Rigor y Excepciones',
+      description: 'Estándar analítico POVEDA: detección de errores conceptuales, análisis de excepciones, condiciones críticas y precisión técnica.',
       badgeStyle: 'text-orange-700 bg-orange-50 dark:bg-orange-950/60 border-orange-200 dark:border-orange-800'
     },
     {
       id: 'jacqueline',
       label: 'Jacqueline',
       subtitle: 'NIVEL MAESTRO / EXTREMO',
-      description: 'Preguntas ultra-específicas, capciosas, correlación avanzada cruzada entre documentos y detalles microscópicos con IA de Pensamiento Profundo.',
+      description: 'Síntesis integradora cruzada entre múltiples conceptos, proposiciones compuestas con trampas parciales y deducción crítica profunda.',
       badgeStyle: 'text-amber-500 bg-gradient-to-r from-red-600 to-amber-600 text-white shadow-lg shadow-red-500/25',
       isJacqueline: true
     }
@@ -608,44 +608,50 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
       </div>
 
       {/* Call to Action Bar */}
-      <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="text-xs text-slate-500 dark:text-slate-400">
-          {documents.length === 0 ? (
-            <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-semibold">
-              <Zap className="w-4 h-4 shrink-0" /> Sube al menos 1 documento o imagen en la sección superior para habilitar el inicio del cuestionario.
-            </span>
-          ) : (
-            <span>
-              Generando test exclusivamente a partir de <strong>{documents.length} documento{documents.length === 1 ? '' : 's'}</strong> subido{documents.length === 1 ? '' : 's'}.
-            </span>
-          )}
-        </div>
+      {(() => {
+        const activeDocsCount = documents.filter(d => d.selected !== false).length;
+        return (
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {activeDocsCount === 0 ? (
+                <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1.5 font-semibold">
+                  <Zap className="w-4 h-4 shrink-0" /> Sube o pega al menos 1 material (y mantenlo seleccionado) en la sección superior para habilitar el inicio del cuestionario.
+                </span>
+              ) : (
+                <span>
+                  Generando test exclusivamente a partir de <strong>{activeDocsCount} material{activeDocsCount === 1 ? '' : 'es'}</strong> activo{activeDocsCount === 1 ? '' : 's'}.
+                </span>
+              )}
+            </div>
 
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <button
-            type="button"
-            onClick={onStartQuiz}
-            disabled={isGenerating || selectedModalities.length === 0 || documents.length === 0}
-            className={`w-full sm:w-auto px-7 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-md ${
-              difficulty === 'jacqueline'
-                ? 'bg-gradient-to-r from-red-600 via-amber-600 to-red-600 text-white shadow-red-500/30 hover:scale-[1.02] active:scale-[0.98]'
-                : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-600/25 hover:scale-[1.02] active:scale-[0.98]'
-            } disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none`}
-          >
-            {isGenerating ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                <span>Analizando y Generando Test...</span>
-              </>
-            ) : (
-              <>
-                <span>Iniciar Cuestionario ({questionCount} preguntas)</span>
-                <ArrowRight className="w-4 h-4" />
-              </>
-            )}
-          </button>
-        </div>
-      </div>
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <button
+                type="button"
+                data-testid="start-quiz-btn"
+                onClick={onStartQuiz}
+                disabled={isGenerating || selectedModalities.length === 0 || activeDocsCount === 0}
+                className={`w-full sm:w-auto px-7 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-md ${
+                  difficulty === 'jacqueline'
+                    ? 'bg-gradient-to-r from-red-600 via-amber-600 to-red-600 text-white shadow-red-500/30 hover:scale-[1.02] active:scale-[0.98]'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-600/25 hover:scale-[1.02] active:scale-[0.98]'
+                } disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none`}
+              >
+                {isGenerating ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Analizando y Generando Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Iniciar Cuestionario ({questionCount} preguntas)</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

@@ -8,11 +8,17 @@ import {
   calculateQuizSummary,
   generateFallbackQuestions,
   sanitizeAndValidateQuestions,
+  stripQuestionBoilerplate,
+  resetGenerationHistoryForTesting,
+  fixSpanishContractionsAndGrammar,
+  resolveAnaphoricSubject,
+  normalizeStudyNotesLine,
+  validateQuestionQualityGate,
   PRESET_SAMPLE_DOCUMENTS,
 } from './quizEngine';
 import { buildLocalDocAnalysis, isBinaryGarbage, cleanExtractedText } from './documentParser';
 import { selectBestFlashModelFromList } from '../services/geminiClient';
-import { QuestionModality, Question, UserAnswer, QuizConfig, UploadedDoc, DifficultyLevel } from '../types';
+import { QuestionModality, Question, UserAnswer, QuizConfig, UploadedDoc, DifficultyLevel, DIFFICULTY_LABELS } from '../types';
 
 test('Modality Selector: Enforces maximum of 3 modalities rule and minimum of 1', () => {
   let selected: QuestionModality[] = ['multiple_choice'];
@@ -468,6 +474,7 @@ paciente y establecer la construcción del encuadre terapéutico como instrument
   for (const q of questions) {
     assert.ok(!q.prompt.includes('demanda del pa.'), `Sentence was truncated mid-word: ${q.prompt}`);
     assert.ok(q.topicTitle?.includes('Encuadre Clínico y Entrevista Inicial'), `Expected heading topicTitle, got: ${q.topicTitle}`);
+    assert.ok(q.specificTopic && q.specificTopic.length >= 4, `Expected specificTopic on question, got: ${q.specificTopic}`);
     if (q.type === 'multiple_choice') {
       assert.equal(q.options?.length, 4);
       // Every option in multiple_choice must be a complete conceptual statement (>= 4 words), never a single isolated verb like "Establecer"
@@ -478,5 +485,394 @@ paciente y establecer la construcción del encuadre terapéutico como instrument
   }
 });
 
+test('stripQuestionBoilerplate removes section/book/manual/page prefixes and goes straight to the clean question', () => {
+  const noisy1 = 'En la sección 3.2 del libro del manual, pág. 14 y 15, ¿cuál es el objetivo principal de la entrevista semidirigida?';
+  assert.equal(
+    stripQuestionBoilerplate(noisy1),
+    '¿Cuál es el objetivo principal de la entrevista semidirigida?'
+  );
+
+  const noisy2 = 'Según el apartado «Encuadre Clínico» del documento "Resumen.pdf" (pág. 8), la entrevista inicial permite establecer el encuadre terapéutico.';
+  assert.equal(
+    stripQuestionBoilerplate(noisy2),
+    'La entrevista inicial permite establecer el encuadre terapéutico.'
+  );
+
+  const noisy3 = 'De acuerdo con el capítulo 4 del manual de derecho constitucional (pp. 22-24), ¿qué establece el principio pro persona?';
+  assert.equal(
+    stripQuestionBoilerplate(noisy3),
+    '¿Qué establece el principio pro persona?'
+  );
+});
+
+test('Every question in all 4 modalities and all modes has both topicTitle and specificTopic and ZERO section/page/manual boilerplate', () => {
+  const doc: UploadedDoc = {
+    id: 'doc-neuro-1',
+    name: 'Neurofisiologia_Sinapsis_y_Neurotransmisores.pdf',
+    size: 42000,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: `1. Transmisión Sináptica Química
+La liberación de neurotransmisores en la hendidura sináptica depende de la entrada de iones de calcio a través de canales dependientes de voltaje en el botón terminal.
+2. Potenciales Postsinápticos Excitatorios e Inhibitorios
+El glutamato actúa como el principal neurotransmisor excitatorio del sistema nervioso central al despolarizar la membrana postsináptica mediante receptores AMPA y NMDA.
+El ácido gamma-aminobutírico (GABA) induce hiperpolarización neuronal al incrementar la permeabilidad selectiva a los iones de cloro.`,
+    status: 'ready',
+  };
+  doc.analysis = buildLocalDocAnalysis(doc);
+
+  const modalities: QuestionModality[] = ['multiple_choice', 'true_false', 'fill_blank', 'open_question'];
+  for (const mod of modalities) {
+    const questions = generateFallbackQuestions([doc], {
+      selectedModalities: [mod],
+      difficulty: 'medio',
+      questionCount: 3,
+      includeDocCrossAnalysis: true,
+      engineMode: 'no_ai',
+    });
+
+    for (const q of questions) {
+      assert.ok(q.topicTitle && q.topicTitle.length >= 4, `Missing topicTitle on ${mod}`);
+      assert.ok(q.specificTopic && q.specificTopic.length >= 4, `Missing specificTopic on ${mod}`);
+      assert.notEqual(
+        normalizeText(q.topicTitle),
+        normalizeText(q.specificTopic),
+        `topicTitle (${q.topicTitle}) and specificTopic (${q.specificTopic}) must be distinct`
+      );
+      assert.ok(!/\b(?:en la secci[óo]n|del manual|p[áa]g\.?\s*\d+|seg[úu]n el documento|de acuerdo con el documento)\b/i.test(q.prompt), `Boilerplate found in prompt: ${q.prompt}`);
+      for (const opt of q.options || []) {
+        assert.ok(!/\b(?:en la secci[óo]n|del manual|p[áa]g\.?\s*\d+|seg[úu]n el apartado|en relaci[óo]n con «)\b/i.test(opt), `Boilerplate found in option: ${opt}`);
+      }
+    }
+  }
+
+  // Also verify sanitizeAndValidateQuestions strips AI-generated boilerplate and populates specificTopic
+  const aiRawWithBoilerplate = [
+    {
+      id: 'ai-1',
+      type: 'multiple_choice',
+      difficulty: 'dificil',
+      topicTitle: 'Transmisión Sináptica Química',
+      specificTopic: 'Canales de calcio dependientes de voltaje',
+      prompt: 'En la sección 1 del libro del manual, pág 12 y 13, ¿qué ión desencadena la exocitosis de vesículas sinápticas en el botón terminal?',
+      options: [
+        'En la sección 1 del manual, la entrada de iones de calcio (Ca2+) a través de canales dependientes de voltaje',
+        'La salida pasiva de iones de potasio (K+) hacia el espacio extracelular',
+        'El bloqueo de receptores postsinápticos por magnesio',
+        'La degradación enzimática de acetilcolina en el soma'
+      ],
+      correctAnswer: 'En la sección 1 del manual, la entrada de iones de calcio (Ca2+) a través de canales dependientes de voltaje',
+      officialAnswer: 'La entrada de calcio por canales dependientes de voltaje activa la fusión vesicular.',
+      explanation: 'El influjo de Ca2+ es el disparador directo de la exocitosis de neurotransmisores.',
+      sourceDocName: doc.name,
+    }
+  ];
+
+  const sanitized = sanitizeAndValidateQuestions(aiRawWithBoilerplate, [doc], {
+    selectedModalities: ['multiple_choice'],
+    difficulty: 'dificil',
+    questionCount: 1,
+    includeDocCrossAnalysis: true,
+    engineMode: 'gemini_visitor',
+  });
+
+  assert.equal(sanitized.length, 1);
+  assert.equal(
+    sanitized[0].prompt,
+    '¿Qué ión desencadena la exocitosis de vesículas sinápticas en el botón terminal?'
+  );
+  assert.equal(sanitized[0].topicTitle, 'Transmisión Sináptica Química');
+  assert.equal(sanitized[0].specificTopic, 'Canales de calcio dependientes de voltaje');
+  assert.ok(!sanitized[0].correctAnswer.toLowerCase().includes('en la sección 1'));
+});
+
+test('Difficulty label for "dificil" is strictly "Difícil (POVEDA)"', () => {
+  assert.equal(DIFFICULTY_LABELS.facil, 'Fácil');
+  assert.equal(DIFFICULTY_LABELS.medio, 'Medio');
+  assert.equal(DIFFICULTY_LABELS.dificil, 'Difícil (POVEDA)');
+  assert.equal(DIFFICULTY_LABELS.jacqueline, 'Jacqueline');
+});
+
+test('Regenerating quizzes in Demo Sin IA produces DIFFERENT questions and covers diverse themes across the entire document', () => {
+  resetGenerationHistoryForTesting();
+
+  const multiSectionDoc: UploadedDoc = {
+    id: 'doc-multi-themes',
+    name: 'Manual_Integral_Fisiologia_y_Clinica.pdf',
+    size: 64000,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: `1. Fisiología Cardiovascular y Gasto Cardíaco
+El gasto cardíaco representa el volumen total de sangre eyectado por el ventrículo izquierdo hacia la arteria aorta en cada minuto para garantizar la perfusión tisular.
+La ley de Frank-Starling establece que la fuerza de contracción ventricular se incrementa en proporción directa al estiramiento diastólico de las fibras miocárdicas.
+2. Filtración Glomerular y Función Renal
+La tasa de filtración glomerular depende de la presión hidrostática capilar frente a la presión oncótica plasmática dentro de la cápsula de Bowman.
+El sistema renina-angiotensina-aldosterona regula la presión arterial sistémica mediante la vasoconstricción arteriolar y la reabsorción tubular de sodio.
+3. Eje Hipotálamo-Hipófisis-Adrenal
+El cortisol endógeno se secreta en la corteza suprarrenal bajo el estímulo de la hormona adrenocorticotropa para modular el metabolismo glucídico y la respuesta al estrés.
+4. Neurotransmisión Colinérgica en la Placa Motora
+La acetilcolina liberada en la unión neuromuscular activa receptores nicotínicos ionotrópicos para desencadenar el potencial de placa terminal y la contracción muscular.`,
+    status: 'ready',
+  };
+  multiSectionDoc.analysis = buildLocalDocAnalysis(multiSectionDoc);
+
+  const config: QuizConfig = {
+    selectedModalities: ['multiple_choice', 'true_false'],
+    difficulty: 'medio',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  };
+
+  const run1 = generateFallbackQuestions([multiSectionDoc], config);
+  const run2 = generateFallbackQuestions([multiSectionDoc], config);
+  const run3 = generateFallbackQuestions([multiSectionDoc], config);
+
+  assert.equal(run1.length, 4);
+  assert.equal(run2.length, 4);
+  assert.equal(run3.length, 4);
+
+  // 1. Within Run 1, questions must span at least 3 distinct main topics (`topicTitle`) across the document
+  const run1Topics = new Set(run1.map(q => q.topicTitle));
+  assert.ok(
+    run1Topics.size >= 3,
+    `Expected questions in Run 1 to cover at least 3 distinct themes across the document, got ${run1Topics.size}: ${Array.from(run1Topics).join(', ')}`
+  );
+
+  // 2. Regenerating (Run 2 vs Run 1, and Run 3 vs Run 2) must produce DIFFERENT question prompts, never the exact same set
+  const run1Prompts = new Set(run1.map(q => normalizeText(q.prompt)));
+  const run2Prompts = new Set(run2.map(q => normalizeText(q.prompt)));
+  const run3Prompts = new Set(run3.map(q => normalizeText(q.prompt)));
+
+  let newQuestionsInRun2 = 0;
+  for (const p of run2Prompts) {
+    if (!run1Prompts.has(p)) newQuestionsInRun2++;
+  }
+  assert.ok(
+    newQuestionsInRun2 >= 3,
+    `Expected regenerating quiz (Run 2) to produce mostly new questions compared to Run 1, but only ${newQuestionsInRun2}/4 were new`
+  );
+
+  let newQuestionsInRun3 = 0;
+  for (const p of run3Prompts) {
+    if (!run2Prompts.has(p)) newQuestionsInRun3++;
+  }
+  assert.ok(
+    newQuestionsInRun3 >= 3,
+    `Expected regenerating quiz (Run 3) to produce mostly new questions compared to Run 2, but only ${newQuestionsInRun3}/4 were new`
+  );
+});
+
+test('Difícil (POVEDA) and Jacqueline (plus Fácil and Medio) produce genuinely distinct questions and structures, NEVER a carbon copy ("calco")', () => {
+  resetGenerationHistoryForTesting();
+
+  const studyDoc: UploadedDoc = {
+    id: 'doc-diff-contrast',
+    name: 'Tratado_Psicodiagnostico_y_Evaluacion.pdf',
+    size: 51000,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: `1. Encuadre Clínico y Entrevista Inicial
+El proceso psicodiagnóstico clínico se inicia con la entrevista semidirigida para comprender la demanda del sujeto y establecer el encuadre de trabajo.
+2. Mecanismos de Defensa y Transferencia
+Durante la administración de técnicas proyectivas, el psicólogo clínico evalúa la fortaleza yoica, los mecanismos de defensa predominantes y la modalidad vincular transferencial.
+3. Devolución Diagnóstica e Informe
+La entrevista de devolución oral consiste en comunicar al examinado una síntesis integrada de sus recursos adaptativos y áreas de conflicto mediante un lenguaje claro.`,
+    status: 'ready',
+  };
+  studyDoc.analysis = buildLocalDocAnalysis(studyDoc);
+
+  const modalities: QuestionModality[] = ['multiple_choice', 'true_false', 'fill_blank', 'open_question'];
+
+  const facilQuestions = generateFallbackQuestions([studyDoc], {
+    selectedModalities: modalities,
+    difficulty: 'facil',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+
+  const medioQuestions = generateFallbackQuestions([studyDoc], {
+    selectedModalities: modalities,
+    difficulty: 'medio',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+
+  const povedaQuestions = generateFallbackQuestions([studyDoc], {
+    selectedModalities: modalities,
+    difficulty: 'dificil',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+
+  const jacquelineQuestions = generateFallbackQuestions([studyDoc], {
+    selectedModalities: modalities,
+    difficulty: 'jacqueline',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+
+  // Verify zero prompt overlap between Difícil (POVEDA) and Jacqueline
+  const povedaPrompts = new Set(povedaQuestions.map(q => normalizeText(q.prompt)));
+  const jacqPrompts = new Set(jacquelineQuestions.map(q => normalizeText(q.prompt)));
+
+  for (const jp of jacqPrompts) {
+    assert.ok(
+      !povedaPrompts.has(jp),
+      `Jacqueline prompt must NOT be identical to Difícil (POVEDA) prompt: "${jp}"`
+    );
+  }
+
+  // Verify zero prompt overlap across all 4 difficulties for Multiple Choice and True/False
+  const allPromptsByDiff = [
+    facilQuestions.map(q => normalizeText(q.prompt)),
+    medioQuestions.map(q => normalizeText(q.prompt)),
+    povedaQuestions.map(q => normalizeText(q.prompt)),
+    jacquelineQuestions.map(q => normalizeText(q.prompt)),
+  ];
+
+  for (let d1 = 0; d1 < allPromptsByDiff.length; d1++) {
+    for (let d2 = d1 + 1; d2 < allPromptsByDiff.length; d2++) {
+      const set1 = new Set(allPromptsByDiff[d1]);
+      for (const p2 of allPromptsByDiff[d2]) {
+        assert.ok(
+          !set1.has(p2),
+          `Difficulty ${d1} and Difficulty ${d2} generated an identical prompt: "${p2}"`
+        );
+      }
+    }
+  }
+});
+
+test('Spanish grammar, contractions (al/del), no ellipsis, and anaphoric context resolution ("este periodo", "esta obra", "además")', () => {
+  assert.equal(
+    fixSpanishContractionsAndGrammar('Se aplica a el paciente de el encuadre...'),
+    'Se aplica al paciente del encuadre'
+  );
+
+  const resolvedPeriodo = resolveAnaphoricSubject(
+    'Este periodo se caracteriza por la evaluación diagnóstica integral mediante entrevistas clínicas.',
+    'Psicodiagnóstico Clínico Inicial'
+  );
+  assert.ok(resolvedPeriodo.includes('«Psicodiagnóstico Clínico Inicial»'), `Expected explicit context for 'Este periodo', got: ${resolvedPeriodo}`);
+  assert.ok(!/^Este periodo\b/i.test(resolvedPeriodo));
+
+  const resolvedObra = resolveAnaphoricSubject(
+    'Esta obra establece los fundamentos técnicos de la entrevista operativa centrada en el consultante.',
+    'Teoría de la Entrevista de Bleger'
+  );
+  assert.ok(resolvedObra.includes('«Teoría de la Entrevista de Bleger»'));
+
+  const resolvedAdemas = resolveAnaphoricSubject(
+    'Además, permite identificar las defensas predominantes frente a la ansiedad paranoide.',
+    'Administración de Técnicas Proyectivas'
+  );
+  assert.ok(resolvedAdemas.includes('«Administración de Técnicas Proyectivas»'));
+});
+
+test('Psychology Oral Summary format ("Resumen para el oral Psicodiagnóstico y Entrevista"): handles (pág. X), Concepto: autores (año), Autor (país): idea, and parenthetical citations without asking years or pages', () => {
+  resetGenerationHistoryForTesting();
+
+  const psicodiagnosticoNotes = `Resumen para el oral Psicodiagnóstico y Entrevista (pág. 1)
+1. Concepto y Encuadre de la Entrevista Psicológica (pág. 4)
+Bleger (Argentina): La entrevista psicológica configura un campo dinámico donde interactúan transferencia y contratransferencia entre entrevistador y consultante.
+Encuadre clínico: Bleger y Ocampo (1971) - mantenimiento constante de las variables de tiempo, lugar y rol técnico durante el proceso psicodiagnóstico.
+Entrevista semidirigida: Siquier de Ocampo (1974)
+Este proceso permite formular hipótesis diagnósticas presuntivas a partir de los observables clínicos y el discurso libre del sujeto (Sternberg, 1998).
+2. Técnicas Proyectivas y Devolución de Información (pág. 12)
+Aberastury (Argentina): El juego diagnóstico infantil constituye la vía regia de acceso al mundo interno y las fantasías inconscientes de enfermedad y curación.
+Devolución diagnóstica: comunicación verbal discriminada y dosificada de los resultados del psicodiagnóstico para favorecer la insight del paciente (pág. 18).`;
+
+  const pastedDoc: UploadedDoc = {
+    id: 'doc-txt-psico',
+    name: 'Resumen para el oral Psicodiagnóstico y Entrevista',
+    size: psicodiagnosticoNotes.length,
+    type: 'text/plain',
+    extension: '.txt',
+    category: 'text',
+    rawText: psicodiagnosticoNotes,
+    selected: true,
+    status: 'ready',
+  };
+  pastedDoc.analysis = buildLocalDocAnalysis(pastedDoc);
+
+  const difficulties: DifficultyLevel[] = ['facil', 'medio', 'dificil', 'jacqueline'];
+  const modalities: QuestionModality[] = ['multiple_choice', 'true_false', 'fill_blank', 'open_question'];
+
+  for (const diff of difficulties) {
+    const questions = generateFallbackQuestions([pastedDoc], {
+      selectedModalities: modalities,
+      difficulty: diff,
+      questionCount: 6,
+      includeDocCrossAnalysis: true,
+      engineMode: 'no_ai',
+    });
+
+    assert.equal(questions.length, 6);
+    for (const q of questions) {
+      assert.equal(
+        validateQuestionQualityGate(q).valid,
+        true,
+        `Question failed quality gate in ${diff}/${q.type}: ${JSON.stringify(q)}`
+      );
+      // Must NEVER contain ellipsis, page numbers, or citation years as answers
+      assert.ok(!q.prompt.includes('…') && !q.prompt.includes('...'), `Ellipsis in prompt: ${q.prompt}`);
+      assert.ok(!/\bp[áa]g\.?\s*\d+/i.test(q.prompt), `Page number in prompt: ${q.prompt}`);
+      assert.ok(!/^\d{4}$/.test(q.correctAnswer.trim()), `Citation year used as answer: ${q.correctAnswer}`);
+      // Explanation must include exact quote and source
+      assert.ok(q.explanation.includes('Cita exacta de los apuntes:'), `Missing exact quote in explanation: ${q.explanation}`);
+      assert.ok(q.explanation.includes('Fuente:'), `Missing source line in explanation: ${q.explanation}`);
+    }
+  }
+});
+
+test('Document selection filter: Deselected documents (selected: false) are excluded from quiz generation', () => {
+  const docSelected: UploadedDoc = {
+    id: 'doc-sel-1',
+    name: 'Apuntes_Seleccionados_Cardiologia.txt',
+    size: 500,
+    type: 'text/plain',
+    extension: '.txt',
+    category: 'text',
+    rawText: '1. Ciclo Cardíaco\nLa sístole ventricular impulsa la sangre oxigenada hacia la circulación sistémica mediante la apertura de la válvula aórtica.',
+    selected: true,
+    status: 'ready',
+  };
+  docSelected.analysis = buildLocalDocAnalysis(docSelected);
+
+  const docUnselected: UploadedDoc = {
+    id: 'doc-unsel-2',
+    name: 'Apuntes_Excluidos_Botanica.txt',
+    size: 500,
+    type: 'text/plain',
+    extension: '.txt',
+    category: 'text',
+    rawText: '1. Fotosíntesis Vegetal\nEl cloroplasto captura fotones solares mediante los pigmentos de clorofila ubicados en la membrana tilacoidal.',
+    selected: false,
+    status: 'ready',
+  };
+  docUnselected.analysis = buildLocalDocAnalysis(docUnselected);
+
+  const questions = generateFallbackQuestions([docSelected, docUnselected], {
+    selectedModalities: ['multiple_choice', 'true_false'],
+    difficulty: 'facil',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  });
+
+  assert.equal(questions.length, 4);
+  for (const q of questions) {
+    assert.equal(q.sourceDocName, 'Apuntes_Seleccionados_Cardiologia.txt');
+    assert.ok(!q.prompt.toLowerCase().includes('cloroplasto'));
+  }
+});
 
 

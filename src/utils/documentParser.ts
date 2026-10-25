@@ -247,9 +247,10 @@ function reconstructParagraphLines(lines: string[]): string[] {
     if (!buffer) {
       buffer = line;
     } else {
-      // If buffer already ended with terminal punctuation (. ! ?), check if `line` starts a new sentence or paragraph
-      if (/[.!?]["'»)]?$/.test(buffer)) {
-        buffer = `${buffer} ${line}`;
+      // If buffer already ended with terminal punctuation (. ! ?) and the next line begins a new sentence/note, flush buffer
+      if (/[.!?]["'»)]?$/.test(buffer) && /^[A-ZÁÉÍÓÚÜÑ¿¡0-9•\-*]/.test(line)) {
+        result.push(buffer);
+        buffer = line;
       } else {
         // Wrapped line inside the same sentence! Join with space
         buffer = `${buffer} ${line}`;
@@ -265,8 +266,9 @@ function reconstructParagraphLines(lines: string[]): string[] {
 }
 
 /**
- * Repairs and sanitizes raw text extracted from PDFs or OCR, removing pagination headers/footers,
- * OCR border noise, and fixing CMap space-collision artifacts while preserving complete sentences.
+ * Repairs and sanitizes raw text extracted from PDFs, OCR, or direct paste, removing pagination headers/footers,
+ * page number annotations "(pág. 12)", parenthetical citation years "(1998)", and fixing CMap space-collision artifacts
+ * while preserving complete sentences and section headings.
  */
 export function sanitizeAcademicText(raw: string): string {
   if (!raw) return '';
@@ -279,12 +281,21 @@ export function sanitizeAcademicText(raw: string): string {
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n');
 
-  // 1. Remove corrupted or standard PDF page headers/footers:
-  // e.g., "P ageA 1 AofA C5", "Page 1 of 5", "Página 2 de 10", "- 3 -"
+  // 1. Remove corrupted or standard PDF page headers/footers and inline page citations:
+  // e.g., "P ageA 1 AofA C5", "Page 1 of 5", "Página 2 de 10", "(pág. 14)", "pág. 12 y 13", "(pp. 12-15)", "- 3 -"
   text = text
     .replace(/\bP\s*age[A-Za-z0-9\s]*?\d+\s*[A-Za-z]*of[A-Za-z0-9\s]*?\b/gi, ' ')
     .replace(/\bPage\s+\d+\s*(?:of|\/)\s*\d+\b/gi, ' ')
     .replace(/\bP[áa]gina\s+\d+\s*(?:de|\/)\s*\d+\b/gi, ' ')
+    .replace(/\(\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)\s*\d+(?:\s*[-–a,y]\s*\d+)*\s*\)/gi, ' ')
+    .replace(/\b(?:p[áa]g(?:ina)?s?\.?|pp\.?)\s*\d+(?:\s*(?:[-–a]|y|e)\s*\d+)*\b/gi, ' ')
+    // Strip standalone parenthetical citation years like "Sternberg (1998)" -> "Sternberg" or "(1974, p. 12)" -> ""
+    .replace(/\(\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d+(?:\s*[-–]\s*\d+)?)?\s*\)/gi, ' ')
+    // Transform parenthetical author+year citations "(Bleger, 1971)" or "(Ocampo y Arzeno, 1985, p. 14)" into "(según Bleger)"
+    .replace(
+      /\(\s*([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+(?:\s+(?:y|e|de|del|&\s*|\s*,\s*)\s*[A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+){0,3})\s*,\s*(?:18|19|20)\d{2}[a-z]?(?:\s*[,;:]\s*(?:p[áa]g(?:ina)?s?\.?|pp?\.?)?\s*\d+(?:\s*[-–]\s*\d+)?)?\s*\)/g,
+      '(según $1)'
+    )
     .replace(/(?:^|\n)\s*[-–—]?\s*\d{1,3}\s*[-–—]?\s*(?=\n|$)/g, '\n');
 
   // 2. Repair PDF CMap space collisions where 'A' was mapped to space between words
@@ -341,6 +352,7 @@ export function sanitizeAcademicText(raw: string): string {
   return reconstructed
     .join('\n')
     .replace(/[ \t]+/g, ' ')
+    .replace(/\s+([.,;:!?])/g, '$1')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -351,14 +363,15 @@ export function sanitizeAcademicText(raw: string): string {
 export function isCleanStudySentence(sentence: string): boolean {
   if (!sentence) return false;
   const trimmed = sentence.trim();
-  if (trimmed.length < 30 || trimmed.length > 520) return false;
+  if (trimmed.length < 28 || trimmed.length > 560) return false;
 
-  // Reject sentences containing page numbers or CMap corruption patterns
+  // Reject sentences containing ellipsis ("..." or "…") or page numbers or CMap corruption patterns
+  if (trimmed.includes('…') || trimmed.includes('...')) return false;
   if (/\b(?:Page|P[áa]gina)\s+\d+/i.test(trimmed)) return false;
   if (/\bAofA\b|\bageA\b|\bsicodiagn[óo]sticoAyA/i.test(trimmed)) return false;
 
   const tokens = trimmed.split(/\s+/).filter(Boolean);
-  if (tokens.length < 6) return false;
+  if (tokens.length < 5) return false;
 
   // Reject sentences cut off mid-clause (ending with an article, preposition, conjunction, or 1-2 char truncated fragment)
   const lastTokenClean = tokens[tokens.length - 1]
@@ -1001,14 +1014,23 @@ export async function extractTextFromFile(file: File): Promise<{
  * Builds a rich local heuristic analysis (summary, keyThemes, wordCount) strictly from the document's actual text.
  */
 export function buildLocalDocAnalysis(doc: Pick<UploadedDoc, 'name' | 'category' | 'rawText'>): NonNullable<UploadedDoc['analysis']> {
-  const cleanText = cleanExtractedText(doc.rawText || '');
-  const hasRealText = cleanText.length > 20 && !isBinaryGarbage(cleanText) && !cleanText.startsWith('[Imagen multimodal');
+  const raw = doc.rawText || '';
+  // For instant responsiveness on massive texts (hundreds of pages), sanitize up to 60k chars for quick summary/themes while counting full words rapidly
+  const sampleRaw = raw.length > 60000 ? raw.slice(0, 60000) : raw;
+  const cleanSample = cleanExtractedText(sampleRaw);
+  const hasRealText = cleanSample.length > 15 && !isBinaryGarbage(cleanSample) && !cleanSample.startsWith('[Imagen multimodal');
 
-  const words = hasRealText ? cleanText.split(/\s+/).filter(w => !isCorruptedToken(w)) : [];
-  const wordCount = words.length;
+  const estimatedFullWords =
+    raw.length > 60000
+      ? Math.round((raw.trim().split(/\s+/).length))
+      : hasRealText
+      ? cleanSample.split(/\s+/).filter(w => !isCorruptedToken(w)).length
+      : 0;
+  const wordCount = estimatedFullWords;
 
   const sentences = hasRealText
-    ? cleanText
+    ? cleanSample
+        .slice(0, 8000)
         .split(/(?<=[.!?])\s+|\n+/)
         .map(s => s.trim())
         .filter(s => isCleanStudySentence(s))
@@ -1025,7 +1047,7 @@ export function buildLocalDocAnalysis(doc: Pick<UploadedDoc, 'name' | 'category'
 
   const freq = new Map<string, { display: string; count: number }>();
   if (hasRealText) {
-    const rawTokens = cleanText.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || [];
+    const rawTokens = cleanSample.slice(0, 40000).match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || [];
     for (const tok of rawTokens) {
       if (!isValidSpanishStudyWord(tok)) continue;
       const lower = tok.toLowerCase();
@@ -1056,7 +1078,7 @@ export function buildLocalDocAnalysis(doc: Pick<UploadedDoc, 'name' | 'category'
 
   const hasHandwriting =
     /apunte|mano|cuaderno|pizarra|manuscrito|htr|caligrafia/i.test(doc.name) ||
-    (hasRealText && /manuscrito|a mano|al margen|cuaderno/i.test(cleanText));
+    (hasRealText && /manuscrito|a mano|al margen|cuaderno/i.test(cleanSample));
 
   return {
     summary,
@@ -1065,7 +1087,7 @@ export function buildLocalDocAnalysis(doc: Pick<UploadedDoc, 'name' | 'category'
     handwrittenNotes: hasHandwriting && sentences.length > 0 ? [sentences[0]] : [],
     diagramDescriptions: [],
     multimodalNotes: hasRealText
-      ? `${doc.category === 'image' ? 'OCR Óptico completado' : 'Texto extraído y depurado'} (${wordCount} palabras válidas).`
+      ? `${doc.category === 'image' ? 'OCR Óptico completado' : doc.category === 'text' ? 'Texto directo indexado al instante' : 'Texto extraído y depurado'} (${wordCount} palabras válidas).`
       : 'Documento registrado. Si es una imagen sin texto legible, puedes pegar apuntes adicionales haciendo clic en "Editar / Pegar texto".',
     wordCount,
   };

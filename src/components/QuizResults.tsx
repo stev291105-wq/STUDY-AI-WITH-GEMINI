@@ -17,7 +17,7 @@ import {
   Share2,
   Download
 } from 'lucide-react';
-import { QuizSummary, QuestionModality } from '../types';
+import { QuizSummary, QuestionModality, DIFFICULTY_LABELS } from '../types';
 
 interface QuizResultsProps {
   summary: QuizSummary;
@@ -117,7 +117,7 @@ export const QuizResults: React.FC<QuizResultsProps> = ({
                 </span>
               ) : (
                 <span className="bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 px-3 py-1 rounded-full">
-                  Dificultad: {summary.difficulty}
+                  Dificultad: {DIFFICULTY_LABELS[summary.difficulty] || summary.difficulty}
                 </span>
               )}
             </div>
@@ -344,8 +344,15 @@ export const QuizResults: React.FC<QuizResultsProps> = ({
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                             {getModalityName(question.type)}
                           </span>
-                          <span className="px-2.5 py-0.5 rounded-md text-[11px] font-extrabold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                            Temática: {question.topicTitle || question.sourceSection || 'Conceptos Centrales del Documento'}
+                          <span className="px-2.5 py-1 rounded-md text-[11px] bg-indigo-50 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-800 inline-flex flex-wrap items-baseline gap-1.5">
+                            <span className="font-extrabold">
+                              Tema principal: {question.topicTitle || 'Conceptos Fundamentales'}
+                            </span>
+                            <span aria-hidden="true">—</span>
+                            <span className="font-semibold">Referencia:</span>
+                            <span className="font-extrabold underline decoration-2 decoration-indigo-500 underline-offset-2">
+                              {question.specificTopic || question.sourceSection || 'Concepto clave'}
+                            </span>
                           </span>
                           <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
                             • {question.sourceDocName}

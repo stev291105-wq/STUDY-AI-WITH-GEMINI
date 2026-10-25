@@ -2,6 +2,13 @@ export type QuestionModality = 'multiple_choice' | 'true_false' | 'fill_blank' |
 
 export type DifficultyLevel = 'facil' | 'medio' | 'dificil' | 'jacqueline';
 
+export const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  facil: 'Fácil',
+  medio: 'Medio',
+  dificil: 'Difícil (POVEDA)',
+  jacqueline: 'Jacqueline',
+};
+
 export type EngineMode = 'gemini_visitor' | 'no_ai' | 'gemini_env' | 'custom_keys';
 
 export type CustomProviderType = 'grok' | 'llama' | 'openai' | 'gemini';
@@ -26,7 +33,8 @@ export interface UploadedDoc {
   size: number;
   type: string;
   extension: string;
-  category: 'pdf' | 'word' | 'powerpoint' | 'image' | 'canva' | 'gdoc' | 'other';
+  category: 'pdf' | 'word' | 'powerpoint' | 'image' | 'canva' | 'gdoc' | 'text' | 'other';
+  selected?: boolean;
   rawText?: string;
   base64Data?: string;
   mimeType?: string;
@@ -51,6 +59,7 @@ export interface QuizConfig {
   includeDocCrossAnalysis: boolean;
   engineMode: EngineMode;
   customConfig?: CustomAIConfig;
+  generationSeed?: number;
 }
 
 export interface Question {
@@ -58,6 +67,7 @@ export interface Question {
   type: QuestionModality;
   difficulty: DifficultyLevel;
   topicTitle?: string;
+  specificTopic?: string;
   prompt: string;
   // Multiple Choice or True/False
   options?: string[];

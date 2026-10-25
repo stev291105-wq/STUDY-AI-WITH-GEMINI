@@ -16,7 +16,7 @@ import {
   FileText,
   PenTool
 } from 'lucide-react';
-import { Question, UserAnswer, DifficultyLevel, EngineMode, CustomAIConfig, VisitorGeminiState } from '../types';
+import { Question, UserAnswer, DifficultyLevel, DIFFICULTY_LABELS, EngineMode, CustomAIConfig, VisitorGeminiState } from '../types';
 import { evaluateMechanicA, assessSemanticSimilarity, normalizeText } from '../utils/quizEngine';
 import { evaluateVisitorOpenAnswerWithGemini } from '../services/geminiClient';
 
@@ -236,8 +236,8 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
                 <Flame className="w-3.5 h-3.5 animate-pulse" /> Jacqueline
               </span>
             ) : (
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 capitalize">
-                {difficulty}
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                {DIFFICULTY_LABELS[difficulty] || difficulty}
               </span>
             )}
           </div>
@@ -304,19 +304,35 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
           </div>
         </div>
 
-        {/* Thematic Title + Question Prompt */}
-        <div className="space-y-3">
+        {/* Thematic Title (Main Topic + Underlined Specific Subtopic) + Question Prompt */}
+        <div className="space-y-4">
           <div
             data-testid="question-topic-title"
-            className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 text-indigo-800 dark:text-indigo-200 text-xs sm:text-sm font-extrabold tracking-tight"
+            className="p-3.5 sm:p-4 rounded-xl bg-indigo-50/90 dark:bg-indigo-950/70 border border-indigo-200 dark:border-indigo-800/80 flex flex-wrap items-baseline gap-x-2.5 gap-y-1.5 text-xs sm:text-sm"
           >
-            <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-            <span>
-              Temática:{' '}
-              <span className="text-indigo-950 dark:text-white">
-                {currentQuestion.topicTitle || currentQuestion.sourceSection || 'Conceptos Centrales del Documento'}
+            <div className="inline-flex items-center gap-1.5 font-extrabold text-indigo-900 dark:text-indigo-200">
+              <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 self-center" />
+              <span>Tema principal:</span>
+              <span className="text-slate-900 dark:text-white">
+                {currentQuestion.topicTitle || 'Conceptos Fundamentales'}
               </span>
+            </div>
+
+            <span className="text-indigo-400 dark:text-indigo-500 font-bold" aria-hidden="true">
+              —
             </span>
+
+            <div className="inline-flex items-baseline gap-1.5">
+              <span className="font-semibold text-indigo-700 dark:text-indigo-300">
+                Referencia específica:
+              </span>
+              <span
+                data-testid="question-specific-topic"
+                className="font-extrabold text-indigo-950 dark:text-indigo-100 underline decoration-2 decoration-indigo-600 dark:decoration-indigo-400 underline-offset-4"
+              >
+                {currentQuestion.specificTopic || currentQuestion.sourceSection || 'Concepto clave evaluado'}
+              </span>
+            </div>
           </div>
 
           <h3 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white leading-relaxed">
