@@ -124,7 +124,8 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
         currentQuestion.prompt,
         currentQuestion.officialAnswer || currentQuestion.correctAnswer,
         text,
-        visitorState.apiKey
+        visitorState.apiKey,
+        visitorState.model
       );
       setAiFeedback(result.feedback);
       // Auto-update answer correctness if not already manually self-evaluated

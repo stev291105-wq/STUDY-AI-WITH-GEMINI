@@ -2,20 +2,20 @@ import React, { useRef, useState } from 'react';
 import {
   UploadCloud,
   FileText,
-  FileCode,
   Image as ImageIcon,
   CheckCircle2,
-  AlertCircle,
   Trash2,
   Sparkles,
   Eye,
   PenTool,
   Cpu,
   Layers,
-  FolderOpen
+  FolderOpen,
+  Edit3
 } from 'lucide-react';
 import { UploadedDoc } from '../types';
 import { PRESET_SAMPLE_DOCUMENTS } from '../utils/quizEngine';
+import { extractTextFromFile, buildLocalDocAnalysis } from '../utils/documentParser';
 
 interface DocIngestionProps {
   documents: UploadedDoc[];
@@ -28,16 +28,16 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
   documents,
   setDocuments,
   onAnalyzeDoc,
-  isAnalyzing,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedPreviewDoc, setSelectedPreviewDoc] = useState<UploadedDoc | null>(null);
+  const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const getDocCategory = (filename: string, mime: string): UploadedDoc['category'] => {
+  const getDocCategory = (filename: string): UploadedDoc['category'] => {
     const ext = filename.split('.').pop()?.toLowerCase() || '';
     if (['pdf'].includes(ext)) return 'pdf';
-    if (['doc', 'docx', 'gdoc'].includes(ext)) return 'word';
+    if (['doc', 'docx', 'gdoc', 'odt', 'rtf'].includes(ext)) return 'word';
     if (['ppt', 'pptx'].includes(ext)) return 'powerpoint';
     if (['png', 'jpg', 'jpeg', 'webp', 'bmp', 'heic'].includes(ext)) return 'image';
     if (filename.toLowerCase().includes('canva')) return 'canva';
@@ -50,45 +50,27 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const extension = `.${file.name.split('.').pop()?.toLowerCase() || ''}`;
-      const category = getDocCategory(file.name, file.type);
-      const isImage = category === 'image' || file.type.startsWith('image/');
+      const category = getDocCategory(file.name);
 
       const docId = `doc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-      // Read text or base64
       let rawText = '';
       let base64Data: string | undefined = undefined;
 
       try {
-        if (isImage) {
-          base64Data = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-          });
-          rawText = `[Imagen multimodal detectada: ${file.name} - En espera de análisis visual OCR/HTR]`;
-        } else {
-          // For text, markdown, docx/pdf text extraction preview
-          rawText = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve((reader.result as string) || '');
-            reader.onerror = () => resolve(`Contenido del archivo ${file.name}`);
-            reader.readAsText(file.slice(0, 50000));
-          });
-          // Also store base64 if PDF or small document for multimodal Gemini inspection
-          if (file.size < 15 * 1024 * 1024) {
-            base64Data = await new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result as string);
-              reader.readAsDataURL(file);
-            });
-          }
-        }
+        const extracted = await extractTextFromFile(file);
+        rawText = extracted.rawText;
+        base64Data = extracted.base64Data;
       } catch (err) {
         console.warn('Error reading file:', err);
-        rawText = `Documento ${file.name} preparado para procesamiento.`;
+        rawText = '';
       }
+
+      const initialAnalysis = buildLocalDocAnalysis({
+        name: file.name,
+        category,
+        rawText,
+      });
 
       const doc: UploadedDoc = {
         id: docId,
@@ -100,18 +82,46 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
         rawText,
         base64Data,
         mimeType: file.type || 'application/octet-stream',
-        status: 'uploading',
+        status: 'ready',
+        analysis: initialAnalysis,
       };
 
       newDocs.push(doc);
     }
 
-    setDocuments(prev => [...prev, ...newDocs]);
+    // CRITICAL: When the user uploads their own document(s), automatically remove any preset sample documents
+    // so the study session uses ONLY the user's uploaded documents!
+    setDocuments(prev => {
+      const userOnlyDocs = prev.filter(d => !d.id.startsWith('sample-doc-'));
+      return [...userOnlyDocs, ...newDocs];
+    });
+
+    if (newDocs.length > 0) {
+      setSelectedPreviewDoc(newDocs[0]);
+    }
 
     // Trigger analysis for each newly added doc
     for (const doc of newDocs) {
       await onAnalyzeDoc(doc);
     }
+  };
+
+  const handleUpdateDocText = (docId: string, newText: string) => {
+    setDocuments(prev =>
+      prev.map(d => {
+        if (d.id !== docId) return d;
+        const updatedAnalysis = buildLocalDocAnalysis({
+          name: d.name,
+          category: d.category,
+          rawText: newText,
+        });
+        return {
+          ...d,
+          rawText: newText,
+          analysis: updatedAnalysis,
+        };
+      })
+    );
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -135,13 +145,11 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
   const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       await processFiles(e.target.files);
-      // Reset input value so same files can be re-selected if desired
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
   const handleLoadSamples = () => {
-    // Add presets without duplicating ids
     setDocuments(prev => {
       const existingNames = new Set(prev.map(d => d.name));
       const freshSamples = PRESET_SAMPLE_DOCUMENTS.filter(s => !existingNames.has(s.name));
@@ -187,6 +195,8 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
     }
   };
 
+  const hasPresetDocsOnly = documents.length > 0 && documents.every(d => d.id.startsWith('sample-doc-'));
+
   return (
     <div className="space-y-6">
       {/* Header and Callout */}
@@ -197,7 +207,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
             1. Ingesta de Documentos & OCR Multimodal
           </h2>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-            Sube archivos ilimitados en cualquier formato. La IA analiza texto digital nativo, esquemas de Canva y <strong>reconoce apuntes escritos a mano (HTR)</strong>.
+            Sube tus documentos de estudio. Las preguntas en <strong>todos los modos (con o sin IA)</strong> se generarán <strong>exclusivamente</strong> de los archivos activos en esta lista.
           </p>
         </div>
 
@@ -225,7 +235,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
         </div>
       </div>
 
-      {/* Drag & Drop Zone (Supports unlimited uploads) */}
+      {/* Drag & Drop Zone */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -241,8 +251,9 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
           ref={fileInputRef}
           type="file"
           multiple
+          aria-label="Subir archivos de estudio"
           className="hidden"
-          accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md"
+          accept=".pdf,.doc,.docx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.json,.html"
           onChange={handleFileInputChange}
         />
 
@@ -256,13 +267,13 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
               Arrastra y suelta tus archivos aquí, o <span className="text-indigo-600 dark:text-indigo-400 underline">haz clic para explorar</span>
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-              Carga ilimitada sin restricciones • PDF, Word (.docx), PowerPoint (.pptx), Diseños Canva, Fotos de cuadernos/apuntes manuscritos (.jpg, .png)
+              Al subir tu propio documento, los documentos de ejemplo se reemplazan automáticamente para que estudies únicamente tu material (.pdf, .docx, .pptx, .txt, .md, imágenes).
             </p>
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
             <span className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-              PDF & Docs
+              PDF & Docs (.docx, .txt)
             </span>
             <span className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
               PPTX & Canva
@@ -280,15 +291,23 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
       {/* Document Grid */}
       {documents.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
-            <span>DOCUMENTOS CARGADOS EN ESTA SESIÓN ({documents.length})</span>
-            <span>Haz clic en un documento para ver su análisis OCR</span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 px-1">
+            <span>
+              DOCUMENTOS ACTIVOS PARA ESTA SESIÓN ({documents.length}){' '}
+              {hasPresetDocsOnly && (
+                <span className="text-amber-600 dark:text-amber-400 font-normal">
+                  (Ejemplos de demostración — sube tu propio archivo para reemplazarlos)
+                </span>
+              )}
+            </span>
+            <span>Haz clic en un documento para ver o editar su texto extraído</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
             {documents.map(doc => {
               const badge = getCategoryBadge(doc.category);
               const isSelected = selectedPreviewDoc?.id === doc.id;
+              const isEditing = editingDocId === doc.id;
 
               return (
                 <div
@@ -321,6 +340,9 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                             {badge.label}
                           </span>
                           <span>{formatFileSize(doc.size)}</span>
+                          {doc.analysis?.wordCount ? (
+                            <span>• {doc.analysis.wordCount} palabras</span>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -345,7 +367,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-[11px]">
-                        <CheckCircle2 className="w-3 h-3 text-slate-400" /> Texto digital extraído
+                        <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Fuente activa para preguntas
                       </span>
                     )}
 
@@ -356,16 +378,19 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                     )}
 
                     <span className="ml-auto text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold flex items-center gap-1">
-                      <Eye className="w-3 h-3" /> {isSelected ? 'Ocultar detalles' : 'Ver análisis'}
+                      <Eye className="w-3 h-3" /> {isSelected ? 'Ocultar detalles' : 'Ver análisis / texto'}
                     </span>
                   </div>
 
                   {/* Expanded detail when selected */}
                   {isSelected && (
-                    <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 text-xs space-y-2 bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg">
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 text-xs space-y-2.5 bg-slate-50 dark:bg-slate-950/60 p-3 rounded-lg cursor-default"
+                    >
                       {doc.analysis?.summary && (
                         <div>
-                          <span className="font-semibold text-slate-700 dark:text-slate-300">Resumen pedagógico:</span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">Resumen extraído del documento:</span>
                           <p className="text-slate-600 dark:text-slate-400 mt-0.5">{doc.analysis.summary}</p>
                         </div>
                       )}
@@ -392,6 +417,39 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
                           ))}
                         </div>
                       )}
+
+                      {/* Editable raw text section so user can inspect or paste/refine document text */}
+                      <div className="pt-2 border-t border-slate-200/80 dark:border-slate-800">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">
+                            Texto fuente del documento:
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setEditingDocId(isEditing ? null : doc.id)}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>{isEditing ? 'Listo' : 'Editar / Pegar texto'}</span>
+                          </button>
+                        </div>
+
+                        {isEditing ? (
+                          <textarea
+                            rows={5}
+                            value={doc.rawText || ''}
+                            onChange={(e) => handleUpdateDocText(doc.id, e.target.value)}
+                            placeholder="Pega o edita aquí el texto o apuntes de este documento para generar preguntas aún más específicas..."
+                            className="w-full p-2.5 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                          />
+                        ) : (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-3 font-mono bg-white dark:bg-slate-900 p-2 rounded border border-slate-200 dark:border-slate-800">
+                            {doc.rawText
+                              ? doc.rawText.slice(0, 300) + (doc.rawText.length > 300 ? '...' : '')
+                              : 'Sin texto plano directo (puedes pulsar "Editar / Pegar texto" o usar el análisis multimodal con IA).'}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

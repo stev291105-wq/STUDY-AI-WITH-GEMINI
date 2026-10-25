@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { generateFallbackQuestions, PRESET_SAMPLE_DOCUMENTS } from './src/utils/quizEngine.ts';
+import { buildLocalDocAnalysis } from './src/utils/documentParser.ts';
 
 dotenv.config();
 
@@ -86,12 +87,35 @@ app.post('/api/test-provider-key', async (req: Request, res: Response) => {
     }
 
     if (provider === 'gemini') {
-      const customAi = new GoogleGenAI({ apiKey });
-      const testRes = await customAi.models.generateContent({
-        model: model || 'gemini-3.8-flash',
-        contents: 'Responde "OK"',
-      });
-      return res.json({ ok: true, message: testRes.text?.slice(0, 20) || 'Conexión exitosa' });
+      const customAi = new GoogleGenAI({ apiKey: apiKey.trim() });
+      const candidates = [
+        model && model !== 'gemini-2.5-flash' ? model : 'gemini-flash-latest',
+        'gemini-3-flash-preview',
+        'gemini-3.8-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-3.1-flash-lite',
+      ];
+      let lastErr = '';
+      for (const candidate of candidates) {
+        try {
+          const testRes = await customAi.models.generateContent({
+            model: candidate,
+            contents: 'Responde "OK"',
+          });
+          return res.json({
+            ok: true,
+            model: candidate,
+            message: testRes.text?.slice(0, 20) || 'Conexión exitosa',
+          });
+        } catch (e: any) {
+          lastErr = e.message || '';
+          if (lastErr.includes('404') || lastErr.includes('no longer available') || lastErr.includes('not found')) {
+            continue;
+          }
+          break;
+        }
+      }
+      return res.status(400).json({ ok: false, error: lastErr || 'No se pudo validar la clave de Gemini' });
     }
 
     // OpenAI-compatible providers
@@ -130,32 +154,19 @@ app.post('/api/test-provider-key', async (req: Request, res: Response) => {
 // 2. Multimodal OCR & HTR Document Analysis
 app.post('/api/analyze-multimodal', async (req: Request, res: Response) => {
   try {
-    const { doc, engineMode = 'gemini_env', customConfig } = req.body;
+    const { doc, engineMode = 'gemini_env' } = req.body;
     if (!doc) {
       return res.status(400).json({ error: 'Falta la información del documento.' });
     }
 
     // MODO ESTUDIO SIN IA: Procesamiento completamente local sin llamadas externas
     if (engineMode === 'no_ai') {
-      const hasHandwritingClue = /apunte|mano|cuaderno|pizarra|manuscrito|htr|caligrafia/i.test(doc.name) ||
-        (doc.rawText && /manuscrito|a mano|al margen|lapiz|cuaderno/i.test(doc.rawText));
-      const wordCount = (doc.rawText || '').split(/\s+/).filter(Boolean).length || 120;
-
+      const localAnalysis = buildLocalDocAnalysis(doc);
       return res.json({
         success: true,
         modeUsed: 'no_ai',
-        analysis: {
-          summary: `[Modo Estudio Sin IA] Documento "${doc.name}" indexado localmente. Conceptos extraídos por análisis heurístico sin consumo de APIs.`,
-          keyThemes: ['Análisis local', 'Glosario de conceptos', 'Materia de estudio'],
-          hasHandwriting: Boolean(hasHandwritingClue),
-          handwrittenNotes: hasHandwritingClue
-            ? ['Notas al margen detectadas en la estructura del documento.']
-            : [],
-          diagramDescriptions: ['Esquema conceptual indexado.'],
-          multimodalNotes: 'Motor local: Procesamiento sin conexión a modelos de lenguaje.',
-          wordCount,
-        },
-        extractedText: doc.rawText || `Contenido de estudio extraído del archivo ${doc.name}.`,
+        analysis: localAnalysis,
+        extractedText: doc.rawText || '',
       });
     }
 

@@ -61,7 +61,7 @@ export default function App() {
     return {
       apiKey: saved.apiKey,
       remember: saved.remember,
-      model: saved.apiKey ? 'gemini-2.5-flash' : '',
+      model: saved.model || (saved.apiKey ? 'gemini-flash-latest' : ''),
       isConnected: Boolean(saved.apiKey),
     };
   });
@@ -144,23 +144,30 @@ export default function App() {
     setIsAnalyzing(true);
     setAppQuotaMessage('');
 
+    // If Sin IA mode is active, local analysis from DocIngestion is already complete
+    if (config.engineMode === 'no_ai') {
+      setIsAnalyzing(false);
+      return;
+    }
+
     // If Visitor Gemini mode is active and key is present, execute directly in browser!
     if (config.engineMode === 'gemini_visitor') {
       if (!visitorState.isConnected || !visitorState.apiKey) {
-        setIsVisitorModalOpen(true);
+        // Keep local extracted text analysis without blocking upload flow
         setIsAnalyzing(false);
         return;
       }
 
       try {
-        const analysisResult = await analyzeVisitorDocWithGemini(doc, visitorState.apiKey);
+        const result = await analyzeVisitorDocWithGemini(doc, visitorState.apiKey, visitorState.model);
         setDocuments(prev =>
           prev.map(d =>
             d.id === doc.id
               ? {
                   ...d,
                   status: 'ready',
-                  analysis: analysisResult,
+                  analysis: result.analysis || d.analysis,
+                  rawText: result.extractedText || d.rawText,
                 }
               : d
           )
@@ -223,6 +230,17 @@ export default function App() {
 
     setAppQuotaMessage('');
 
+    // Case 0: Modo Estudio Sin IA (100% local, instant, strictly from activeDocs)
+    if (config.engineMode === 'no_ai') {
+      const localQuestions = generateFallbackQuestions(activeDocs, config);
+      setQuestions(localQuestions);
+      setCurrentIndex(0);
+      setAnswers({});
+      setQuizStartTime(Date.now());
+      setAppState('playing');
+      return;
+    }
+
     // Case 1: Visitor Gemini Mode
     if (config.engineMode === 'gemini_visitor') {
       if (!visitorState.isConnected || !visitorState.apiKey) {
@@ -233,7 +251,33 @@ export default function App() {
 
       setIsGenerating(true);
       try {
-        const generated = await generateVisitorQuestionsWithGemini(activeDocs, config, visitorState.apiKey);
+        // Ensure any uploaded docs that haven't been OCR'd by Gemini yet (e.g. images) get analyzed first
+        const enrichedDocs: UploadedDoc[] = [];
+        for (const d of activeDocs) {
+          if (!d.id.startsWith('sample-doc-') && (!d.rawText || d.rawText.length < 40) && d.base64Data) {
+            try {
+              const ocr = await analyzeVisitorDocWithGemini(d, visitorState.apiKey, visitorState.model);
+              const updatedDoc: UploadedDoc = {
+                ...d,
+                rawText: ocr.extractedText || d.rawText,
+                analysis: ocr.analysis || d.analysis,
+              };
+              enrichedDocs.push(updatedDoc);
+            } catch {
+              enrichedDocs.push(d);
+            }
+          } else {
+            enrichedDocs.push(d);
+          }
+        }
+        setDocuments(enrichedDocs);
+
+        const generated = await generateVisitorQuestionsWithGemini(
+          enrichedDocs,
+          config,
+          visitorState.apiKey,
+          visitorState.model
+        );
         setQuestions(generated);
         setCurrentIndex(0);
         setAnswers({});
@@ -243,7 +287,7 @@ export default function App() {
         if (err.message?.includes('Alcanzaste el límite gratuito') || err.message?.includes('429')) {
           setAppQuotaMessage('Alcanzaste el límite gratuito de tu cuenta de Gemini; espera un minuto o usa el Modo Estudio Sin IA.');
         }
-        // Fallback generator so the user is never stuck
+        // Fallback generator strictly from activeDocs
         const fallback = generateFallbackQuestions(activeDocs, config);
         setQuestions(fallback);
         setCurrentIndex(0);
@@ -256,7 +300,7 @@ export default function App() {
       return;
     }
 
-    // Case 2: Server-side Gemini or Custom Keys or No AI
+    // Case 2: Server-side Gemini or Custom Keys
     setIsGenerating(true);
     try {
       const res = await fetch('/api/generate-questions', {

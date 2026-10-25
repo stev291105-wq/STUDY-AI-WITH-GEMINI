@@ -64,11 +64,12 @@ export const VisitorGeminiModal: React.FC<VisitorGeminiModalProps> = ({
     setValidationResult(res);
 
     if (res.valid) {
-      saveVisitorKey(keyToTest.trim(), remember);
+      const assignedModel = res.model || 'gemini-flash-latest';
+      saveVisitorKey(keyToTest.trim(), remember, assignedModel);
       onUpdateVisitorState({
         apiKey: keyToTest.trim(),
         remember,
-        model: res.model || 'gemini-2.5-flash',
+        model: assignedModel,
         isConnected: true,
       });
     } else {
@@ -251,11 +252,11 @@ export const VisitorGeminiModal: React.FC<VisitorGeminiModalProps> = ({
             {validationResult?.valid && (
               <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200 space-y-1">
                 <div className="flex items-center gap-2 font-bold text-sm">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Conectado con tu cuenta de Google ✓</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span>Conectado con tu cuenta de Google</span>
                 </div>
                 <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
-                  Modelo asignado: <strong>{validationResult.model || 'gemini-2.5-flash'}</strong> (Flash de alta velocidad y cuota gratuita personal).
+                  Modelo asignado: <strong>{validationResult.model || 'gemini-flash-latest'}</strong> (Flash de alta velocidad y cuota gratuita personal).
                 </p>
               </div>
             )}

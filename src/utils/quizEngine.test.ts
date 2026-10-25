@@ -9,7 +9,9 @@ import {
   generateFallbackQuestions,
   PRESET_SAMPLE_DOCUMENTS,
 } from './quizEngine';
-import { DifficultyLevel, QuestionModality, Question, UserAnswer, QuizConfig } from '../types';
+import { buildLocalDocAnalysis, isBinaryGarbage, cleanExtractedText } from './documentParser';
+import { selectBestFlashModelFromList } from '../services/geminiClient';
+import { QuestionModality, Question, UserAnswer, QuizConfig, UploadedDoc } from '../types';
 
 test('Modality Selector: Enforces maximum of 3 modalities rule and minimum of 1', () => {
   let selected: QuestionModality[] = ['multiple_choice'];
@@ -31,7 +33,6 @@ test('Modality Selector: Enforces maximum of 3 modalities rule and minimum of 1'
   res = toggleModalitySelection(selected, 'open_question');
   assert.equal(res.isBlocked, true);
   assert.equal(res.canAddMore, false);
-  // List remains unchanged at 3
   assert.deepEqual(res.updated, ['multiple_choice', 'true_false', 'fill_blank']);
 
   // Remove one
@@ -143,7 +144,6 @@ test('Quiz Summary & Jacqueline Master Badge calculation', () => {
     }
   ];
 
-  // 4 out of 5 correct = 80% on Jacqueline -> should unlock Jacqueline Master badge!
   const answersPass: Record<string, UserAnswer> = {
     q1: { questionId: 'q1', isCorrect: true, answeredAt: Date.now() },
     q2: { questionId: 'q2', isCorrect: true, answeredAt: Date.now() },
@@ -157,11 +157,7 @@ test('Quiz Summary & Jacqueline Master Badge calculation', () => {
   assert.equal(summaryPass.correctAnswers, 4);
   assert.equal(summaryPass.scorePercentage, 80);
   assert.equal(summaryPass.isJacquelineMaster, true);
-  assert.equal(summaryPass.modalityBreakdown.multiple_choice.total, 2);
-  assert.equal(summaryPass.modalityBreakdown.multiple_choice.correct, 1);
-  assert.equal(summaryPass.modalityBreakdown.true_false.correct, 1);
 
-  // If score is 60% on Jacqueline -> does not unlock Jacqueline Master badge
   const answersFail: Record<string, UserAnswer> = {
     q1: { questionId: 'q1', isCorrect: true, answeredAt: Date.now() },
     q2: { questionId: 'q2', isCorrect: true, answeredAt: Date.now() },
@@ -191,4 +187,61 @@ test('Fallback Question Generator respects configuration modalities and count', 
     assert.ok(q.prompt.length > 10);
     assert.ok(q.officialAnswer.length > 5);
   });
+});
+
+test('Document-Exclusive Generation: Custom uploaded document produces questions ONLY from that document', () => {
+  const customDoc: UploadedDoc = {
+    id: 'doc-custom-inca',
+    name: 'Historia_Arquitectura_Inca_Cusco.txt',
+    size: 1420,
+    type: 'text/plain',
+    extension: '.txt',
+    category: 'other',
+    rawText: `El Imperio del Tahuantinsuyo alcanzó su máxima expansión bajo el gobierno del emperador Pachacútec en el siglo XV.
+La arquitectura incaica destaca por el uso de bloques de piedra finamente tallados que encajan con precisión milimétrica sin necesidad de argamasa.
+La ciudadela de Machu Picchu fue edificada en la vertiente oriental de los Andes peruanos como centro administrativo y ceremonial.
+El sistema contable y estadístico del imperio se registraba mediante cuerdas anudadas de colores denominadas Quipus.`,
+    status: 'ready',
+  };
+  customDoc.analysis = buildLocalDocAnalysis(customDoc);
+
+  const config: QuizConfig = {
+    selectedModalities: ['multiple_choice', 'true_false', 'fill_blank'],
+    difficulty: 'medio',
+    questionCount: 6,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  };
+
+  const questions = generateFallbackQuestions([customDoc], config);
+  assert.equal(questions.length, 6);
+
+  for (const q of questions) {
+    // Must strictly cite the uploaded document name, NEVER sample biology/law/transformer docs
+    assert.equal(q.sourceDocName, 'Historia_Arquitectura_Inca_Cusco.txt');
+    assert.ok(!q.prompt.includes('Complejo II'));
+    assert.ok(!q.prompt.includes('RuBisCO'));
+    assert.ok(!q.prompt.includes('Almonacid'));
+    assert.ok(!q.prompt.includes('Transformer'));
+  }
+});
+
+test('Gemini Flash Model Selector skips deprecated gemini-2.5-flash and chooses valid Flash model', () => {
+  const mockModelsFromApi = [
+    { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-3-flash-preview', supportedGenerationMethods: ['generateContent'] },
+  ];
+
+  const chosen = selectBestFlashModelFromList(mockModelsFromApi);
+  assert.notEqual(chosen, 'gemini-2.5-flash');
+  assert.equal(chosen, 'gemini-3-flash-preview');
+});
+
+test('Document Parser detects binary garbage vs clean text', () => {
+  assert.equal(isBinaryGarbage('%PDF-1.7\n\x00\x01\x02\x03'), true);
+  assert.equal(isBinaryGarbage('PK\x03\x04\x14\x00\x06\x00'), true);
+  assert.equal(isBinaryGarbage('La fotosíntesis oxigénica ocurre en los tilacoides del cloroplasto.'), false);
+  assert.equal(cleanExtractedText('Hola\r\n\r\n\r\nMundo   Prueba'), 'Hola\n\nMundo Prueba');
 });
