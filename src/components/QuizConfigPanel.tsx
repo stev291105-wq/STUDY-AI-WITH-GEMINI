@@ -224,7 +224,8 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
             </div>
 
             {/* Option 2: Modo Estudio Sin IA */}
-            <div
+            <button
+              type="button"
               onClick={() => setConfig(prev => ({ ...prev, engineMode: 'no_ai' }))}
               className={`p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
                 engineMode === 'no_ai'
@@ -245,10 +246,11 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
                 </span>
                 <span className="text-slate-400 font-normal">Sin cuota</span>
               </div>
-            </div>
+            </button>
 
             {/* Option 3: IA del entorno del creador */}
-            <div
+            <button
+              type="button"
               onClick={() => setConfig(prev => ({ ...prev, engineMode: 'gemini_env' }))}
               className={`p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
                 engineMode === 'gemini_env'
@@ -269,7 +271,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
                 </span>
                 <span className="text-slate-400 font-normal">Servidor</span>
               </div>
-            </div>
+            </button>
           </div>
 
           {/* Más Opciones Button & Collapsible */}
@@ -418,10 +420,11 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
 
             if (isJacqueline) {
               return (
-                <div
+                <button
                   key={diff.id}
+                  type="button"
                   onClick={() => setConfig(prev => ({ ...prev, difficulty: diff.id }))}
-                  className={`relative p-4 rounded-xl border-2 transition-all cursor-pointer overflow-hidden ${
+                  className={`relative p-4 rounded-xl border-2 text-left transition-all cursor-pointer overflow-hidden ${
                     isSelected
                       ? 'border-red-500 ring-2 ring-red-500/30 bg-gradient-to-br from-red-950/70 via-slate-900 to-amber-950/60 shadow-lg shadow-red-500/20 jacqueline-glow'
                       : 'border-amber-500/50 hover:border-red-500 bg-gradient-to-br from-slate-900 to-slate-950 text-slate-200'
@@ -459,13 +462,14 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
                       {isSelected ? '✓ Seleccionado' : 'Elegir'}
                     </span>
                   </div>
-                </div>
+                </button>
               );
             }
 
             return (
-              <div
+              <button
                 key={diff.id}
+                type="button"
                 onClick={() => setConfig(prev => ({ ...prev, difficulty: diff.id }))}
                 className={`p-4 rounded-xl border text-left transition-all cursor-pointer ${
                   isSelected
@@ -492,7 +496,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
                     {isSelected ? '✓ Seleccionado' : 'Elegir'}
                   </span>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>

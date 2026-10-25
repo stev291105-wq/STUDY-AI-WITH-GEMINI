@@ -1,24 +1,14 @@
 import type { DifficultyLevel, Question, QuestionModality, QuizConfig, QuizSummary, UploadedDoc, UserAnswer } from '../types.ts';
-import { cleanExtractedText, isBinaryGarbage } from './documentParser.ts';
+import {
+  cleanExtractedText,
+  isBinaryGarbage,
+  isValidSpanishStudyWord,
+  isCleanStudySentence,
+  isCorruptedToken,
+  SPANISH_STOPWORDS,
+} from './documentParser.ts';
 
-const STOPWORDS = new Set([
-  'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del', 'al', 'a', 'en',
-  'con', 'por', 'para', 'sin', 'sobre', 'entre', 'hacia', 'hasta', 'desde', 'según',
-  'segun', 'como', 'que', 'qué', 'cual', 'cuál', 'cuales', 'cuáles', 'quien', 'quién',
-  'donde', 'dónde', 'cuando', 'cuándo', 'cuanto', 'cuánto', 'este', 'esta', 'estos',
-  'estas', 'ese', 'esa', 'esos', 'esas', 'aquel', 'aquella', 'aquellos', 'aquellas',
-  'esto', 'eso', 'aquello', 'mi', 'mis', 'tu', 'tus', 'su', 'sus', 'nuestro', 'nuestra',
-  'y', 'e', 'o', 'u', 'ni', 'pero', 'sino', 'aunque', 'porque', 'pues', 'ya', 'si',
-  'sí', 'no', 'también', 'tambien', 'así', 'asi', 'más', 'mas', 'menos', 'muy', 'tan',
-  'tanto', 'toda', 'todo', 'todos', 'todas', 'otro', 'otra', 'otros', 'otras', 'mismo',
-  'misma', 'cada', 'cualquier', 'alguno', 'alguna', 'algunos', 'algunas', 'ninguno',
-  'ninguna', 'ser', 'es', 'son', 'era', 'eran', 'fue', 'fueron', 'sea', 'sean', 'sido',
-  'estar', 'está', 'esta', 'están', 'estan', 'estaba', 'haber', 'ha', 'han', 'había',
-  'hay', 'tener', 'tiene', 'tienen', 'tenía', 'hacer', 'hace', 'hacen', 'puede', 'pueden',
-  'podría', 'debe', 'deben', 'se', 'le', 'les', 'lo', 'me', 'te', 'nos', 'os', 'uno',
-  'dos', 'tres', 'parte', 'tipo', 'forma', 'manera', 'caso', 'ejemplo', 'través', 'traves',
-  'mediante', 'durante', 'dentro', 'fuera', 'donde', 'cuando', 'solo', 'sólo', 'cuyo', 'cuya'
-]);
+const STOPWORDS = SPANISH_STOPWORDS;
 
 /**
  * Validates and updates modality selection enforcing the max 3 modes rule.
@@ -267,6 +257,7 @@ interface ExtractedSentence {
 
 /**
  * Extracts meaningful sentences and keywords strictly from the uploaded documents in the current session.
+ * Rejects any corrupted PDF CMap tokens, page number headers, or non-Spanish fragments.
  */
 function extractDocumentKnowledge(docs: UploadedDoc[]): {
   sentences: ExtractedSentence[];
@@ -281,32 +272,40 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
     if (doc.rawText && !isBinaryGarbage(doc.rawText) && !doc.rawText.startsWith('[Imagen multimodal')) {
       parts.push(cleanExtractedText(doc.rawText));
     }
-    if (doc.analysis?.summary && !doc.analysis.summary.includes('indexado localmente')) {
-      parts.push(doc.analysis.summary);
+    if (
+      doc.analysis?.summary &&
+      !doc.analysis.summary.includes('indexado localmente') &&
+      !doc.analysis.summary.startsWith('Documento "')
+    ) {
+      parts.push(cleanExtractedText(doc.analysis.summary));
     }
     if (doc.analysis?.handwrittenNotes?.length) {
-      parts.push(...doc.analysis.handwrittenNotes);
+      parts.push(...doc.analysis.handwrittenNotes.map(n => cleanExtractedText(n)));
     }
     if (doc.analysis?.diagramDescriptions?.length) {
-      parts.push(...doc.analysis.diagramDescriptions);
+      parts.push(...doc.analysis.diagramDescriptions.map(d => cleanExtractedText(d)));
     }
 
     const fullText = parts.join('\n');
     const rawChunks = fullText
       .split(/(?<=[.!?])\s+|\n+/)
-      .map(s => s.replace(/^[\s•\-*]+/, '').trim())
-      .filter(s => s.length >= 20 && s.length <= 450);
+      .map(s =>
+        s
+          .replace(/^[\s•\-*R:;«»]+/, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+      )
+      .filter(s => isCleanStudySentence(s));
 
     for (let idx = 0; idx < rawChunks.length; idx++) {
       const chunk = rawChunks[idx];
-      // Extract words >= 4 chars that are not stopwords
-      const matches = chunk.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9\-]{4,}/g) || [];
+      const matches = chunk.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || [];
       const chunkKeywords: string[] = [];
       const seenInChunk = new Set<string>();
 
       for (const word of matches) {
+        if (!isValidSpanishStudyWord(word)) continue;
         const lower = word.toLowerCase();
-        if (STOPWORDS.has(lower) || /^\d+$/.test(word)) continue;
         if (!seenInChunk.has(lower)) {
           seenInChunk.add(lower);
           chunkKeywords.push(word);
@@ -319,21 +318,34 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
         }
       }
 
+      // Prefer longer, substantive academic terms first
+      chunkKeywords.sort((a, b) => b.length - a.length);
+
       if (chunkKeywords.length >= 1) {
-        sentences.push({
-          docName: doc.name,
-          text: chunk.endsWith('.') || chunk.endsWith('?') || chunk.endsWith('!') ? chunk : `${chunk}.`,
-          keywords: chunkKeywords,
-          sectionLabel: `Fragmento #${idx + 1} del documento`,
-        });
+        const cleanSentenceText =
+          chunk.endsWith('.') || chunk.endsWith('?') || chunk.endsWith('!') ? chunk : `${chunk}.`;
+        if (!sentences.some(existing => normalizeText(existing.text) === normalizeText(cleanSentenceText))) {
+          sentences.push({
+            docName: doc.name,
+            text: cleanSentenceText,
+            keywords: chunkKeywords,
+            sectionLabel: `Fragmento #${sentences.filter(s => s.docName === doc.name).length + 1} del documento`,
+          });
+        }
       }
     }
 
-    // Also include keyThemes if provided
+    // Also include valid keyThemes if provided
     if (doc.analysis?.keyThemes) {
       for (const theme of doc.analysis.keyThemes) {
         const cleanTheme = theme.trim();
-        if (cleanTheme.length >= 3 && !STOPWORDS.has(cleanTheme.toLowerCase())) {
+        const themeWords = cleanTheme.split(/\s+/).filter(w => !isCorruptedToken(w));
+        if (
+          cleanTheme.length >= 4 &&
+          themeWords.length > 0 &&
+          !STOPWORDS.has(cleanTheme.toLowerCase()) &&
+          !isCorruptedToken(cleanTheme.replace(/\s+/g, ''))
+        ) {
           const lower = cleanTheme.toLowerCase();
           if (!keywordCounts.has(lower)) {
             keywordCounts.set(lower, { original: cleanTheme, count: 2 });
@@ -342,27 +354,59 @@ function extractDocumentKnowledge(docs: UploadedDoc[]): {
       }
     }
 
-    // If a document had very little text (e.g. an image or title-only file), synthesize factual statements from its themes/name
+    // If a document had very little clean text (e.g. a title-only cover or short summary),
+    // synthesize clean academic statements from its sanitized words and filename concepts.
     if (sentences.filter(s => s.docName === doc.name).length === 0) {
-      const baseName = doc.name.replace(/\.[^.]+$/, '').replace(/[_\-]+/g, ' ').trim();
+      const sanitizedRaw = cleanExtractedText(doc.rawText || '');
+      const rawValidWords = (sanitizedRaw.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{4,}/g) || []).filter(w =>
+        isValidSpanishStudyWord(w)
+      );
+      const baseName = doc.name
+        .replace(/\.[^.]+$/, '')
+        .replace(/\(\d+\)/g, '')
+        .replace(/[_\-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
       const nameWords = baseName
         .split(/\s+/)
-        .filter(w => w.length >= 3 && !STOPWORDS.has(w.toLowerCase()));
-      const kws = nameWords.length > 0 ? nameWords : [baseName || doc.name];
+        .filter(w => isValidSpanishStudyWord(w));
+
+      const combinedValid = Array.from(
+        new Set([...rawValidWords, ...nameWords].map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+      );
+      const kws = combinedValid.length > 0 ? combinedValid : ['Evaluación', 'Diagnóstico', 'Metodología'];
+
       for (const kw of kws) {
-        keywordCounts.set(kw.toLowerCase(), { original: kw, count: 1 });
+        const lower = kw.toLowerCase();
+        if (!keywordCounts.has(lower)) {
+          keywordCounts.set(lower, { original: kw, count: 2 });
+        }
       }
+
+      const primaryTopic = kws[0] || baseName;
+      const secondaryTopic = kws[1] || kws[0] || 'Análisis';
+
       sentences.push({
         docName: doc.name,
-        text: `El documento "${doc.name}" aborda como tema central ${baseName}.`,
-        keywords: kws,
-        sectionLabel: 'Contenido principal del documento',
+        text: `El eje conceptual principal desarrollado en el material de estudio comprende el análisis de ${primaryTopic} y su articulación práctica con ${secondaryTopic}.`,
+        keywords: [primaryTopic, secondaryTopic],
+        sectionLabel: 'Conceptos centrales del documento',
       });
+
+      if (kws.length >= 2) {
+        sentences.push({
+          docName: doc.name,
+          text: `Dentro del estudio de ${primaryTopic}, el concepto de ${secondaryTopic} constituye un elemento fundamental para la evaluación y comprensión integral del caso.`,
+          keywords: [secondaryTopic, primaryTopic],
+          sectionLabel: 'Síntesis temática del documento',
+        });
+      }
     }
   }
 
   const allKeywords = Array.from(keywordCounts.values())
-    .sort((a, b) => b.count - a.count)
+    .filter(k => !isCorruptedToken(k.original))
+    .sort((a, b) => b.count - a.count || b.original.length - a.original.length)
     .map(k => k.original);
 
   return { sentences, allKeywords };
@@ -379,6 +423,21 @@ function rotateOptions(options: string[], seed: number): string[] {
 }
 
 /**
+ * Formats an option string so its initial casing matches the target answer cleanly.
+ */
+function matchOptionCase(candidate: string, referenceTarget: string): string {
+  const trimmed = candidate.trim();
+  if (!trimmed || !referenceTarget) return trimmed;
+  const refStartsUpper = /^[A-ZÁÉÍÓÚÜÑ]/.test(referenceTarget);
+  const isAllCaps = referenceTarget.length > 1 && referenceTarget === referenceTarget.toUpperCase();
+  if (isAllCaps) return trimmed;
+  if (refStartsUpper) {
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  }
+  return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
+/**
  * Replaces the first case-insensitive whole-word occurrence of targetWord in sentence.
  */
 function splitSentenceAroundKeyword(
@@ -389,7 +448,7 @@ function splitSentenceAroundKeyword(
   const regex = new RegExp(`(${escaped})`, 'i');
   const match = regex.exec(sentence);
   if (!match || match.index === undefined) {
-    const words = sentence.split(' ');
+    const words = sentence.split(' ').filter(w => !isCorruptedToken(w));
     const mid = Math.floor(words.length / 2);
     return {
       sentenceBefore: words.slice(0, mid).join(' '),
@@ -636,37 +695,53 @@ export function generateFallbackQuestions(
     const split = splitSentenceAroundKeyword(sObj.text, primaryKeyword);
 
     if (modality === 'multiple_choice') {
-      // Build 3 distractors strictly from concepts in the uploaded documents that do NOT already appear in this sentence
+      // Build 3 clean distractors strictly from valid concepts in the uploaded documents
       const normSentence = normalizeText(sObj.text);
-      const otherKeywords = allKeywords.filter(
+      const cleanKeywordsPool = allKeywords.filter(k => !isCorruptedToken(k));
+      const otherKeywords = cleanKeywordsPool.filter(
         k =>
           normalizeText(k) !== normalizeText(split.targetWord) &&
           !normSentence.includes(normalizeText(k))
       );
-      const fallbackSameDocKeywords = allKeywords.filter(
+      const fallbackSameDocKeywords = cleanKeywordsPool.filter(
         k => normalizeText(k) !== normalizeText(split.targetWord)
       );
-      const poolForDistractors = otherKeywords.length >= 3 ? otherKeywords : [...otherKeywords, ...fallbackSameDocKeywords];
+      const poolForDistractors =
+        otherKeywords.length >= 3 ? otherKeywords : [...otherKeywords, ...fallbackSameDocKeywords];
 
       const distractors: string[] = [];
       for (let dIdx = 0; dIdx < poolForDistractors.length && distractors.length < 3; dIdx++) {
         const candidate = poolForDistractors[(i + dIdx * 2) % poolForDistractors.length];
         if (
           candidate &&
+          !isCorruptedToken(candidate) &&
           normalizeText(candidate) !== normalizeText(split.targetWord) &&
           !distractors.some(existing => normalizeText(existing) === normalizeText(candidate))
         ) {
-          distractors.push(candidate);
+          distractors.push(matchOptionCase(candidate, split.targetWord));
         }
       }
-      const fallbackDistractors = [
-        `Ninguno de los conceptos citados en ${sObj.docName}`,
-        `Un factor externo no mencionado en ${sObj.docName}`,
-        `Concepto opuesto al descrito en el documento`,
+
+      const academicFallbackConcepts = [
+        'sistematización',
+        'metodología',
+        'interpretación',
+        'estructuración',
+        'clasificación',
+        'fundamentación',
       ];
       let fIdx = 0;
       while (distractors.length < 3) {
-        distractors.push(fallbackDistractors[fIdx++ % fallbackDistractors.length]);
+        const fallbackConcept = matchOptionCase(
+          academicFallbackConcepts[(i + fIdx++) % academicFallbackConcepts.length],
+          split.targetWord
+        );
+        if (
+          normalizeText(fallbackConcept) !== normalizeText(split.targetWord) &&
+          !distractors.some(existing => normalizeText(existing) === normalizeText(fallbackConcept))
+        ) {
+          distractors.push(fallbackConcept);
+        }
       }
 
       const rawOptions = [split.targetWord, ...distractors.slice(0, 3)];

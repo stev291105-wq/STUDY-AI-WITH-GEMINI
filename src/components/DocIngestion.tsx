@@ -32,6 +32,7 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [selectedPreviewDoc, setSelectedPreviewDoc] = useState<UploadedDoc | null>(null);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [extractingStatus, setExtractingStatus] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const getDocCategory = (filename: string): UploadedDoc['category'] => {
@@ -51,6 +52,14 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
       const file = files[i];
       const extension = `.${file.name.split('.').pop()?.toLowerCase() || ''}`;
       const category = getDocCategory(file.name);
+
+      setExtractingStatus(
+        category === 'image'
+          ? `Detectando texto con OCR óptico en "${file.name}"...`
+          : category === 'pdf'
+          ? `Extrayendo y depurando texto PDF de "${file.name}"...`
+          : `Procesando "${file.name}"...`
+      );
 
       const docId = `doc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
@@ -89,6 +98,8 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
       newDocs.push(doc);
     }
 
+    setExtractingStatus('');
+
     // CRITICAL: When the user uploads their own document(s), automatically remove any preset sample documents
     // so the study session uses ONLY the user's uploaded documents!
     setDocuments(prev => {
@@ -115,11 +126,15 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
           category: d.category,
           rawText: newText,
         });
-        return {
+        const updatedDoc = {
           ...d,
           rawText: newText,
           analysis: updatedAnalysis,
         };
+        if (selectedPreviewDoc?.id === docId) {
+          setSelectedPreviewDoc(updatedDoc);
+        }
+        return updatedDoc;
       })
     );
   };
@@ -269,6 +284,12 @@ export const DocIngestion: React.FC<DocIngestionProps> = ({
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
               Al subir tu propio documento, los documentos de ejemplo se reemplazan automáticamente para que estudies únicamente tu material (.pdf, .docx, .pptx, .txt, .md, imágenes).
             </p>
+            {extractingStatus && (
+              <div className="mt-3 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold shadow-sm animate-pulse">
+                <Cpu className="w-3.5 h-3.5 animate-spin" />
+                <span>{extractingStatus}</span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2">

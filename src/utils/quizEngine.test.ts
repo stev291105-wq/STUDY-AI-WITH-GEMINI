@@ -245,3 +245,93 @@ test('Document Parser detects binary garbage vs clean text', () => {
   assert.equal(isBinaryGarbage('La fotosíntesis oxigénica ocurre en los tilacoides del cloroplasto.'), false);
   assert.equal(cleanExtractedText('Hola\r\n\r\n\r\nMundo   Prueba'), 'Hola\n\nMundo Prueba');
 });
+
+test('Modo Estudio Sin IA: Rejects corrupted PDF CMap tokens and page headers from questions and options', () => {
+  // Exact corrupted header string reported by user in screenshot
+  const corruptedHeaderAndText = `R :AP sicodiagnósticoAyAEntM eNista P ageA 1 AofA C5.
+El proceso psicodiagnóstico clínico constituye una instancia de evaluación psicológica integral mediante entrevistas semidirigidas y técnicas proyectivas.
+La entrevista inicial permite establecer el encuadre terapéutico, formular hipótesis diagnósticas y evaluar los mecanismos de defensa del paciente.`;
+
+  const cleaned = cleanExtractedText(corruptedHeaderAndText);
+  assert.ok(!cleaned.includes('sicodiagnósticoAyAEntM'), `Cleaned text should not contain sicodiagnósticoAyAEntM, got: ${cleaned}`);
+  assert.ok(!cleaned.includes('ageA'), `Cleaned text should not contain ageA, got: ${cleaned}`);
+  assert.ok(!cleaned.includes('AofA'), `Cleaned text should not contain AofA, got: ${cleaned}`);
+  assert.ok(!cleaned.includes('C5'), `Cleaned text should not contain C5, got: ${cleaned}`);
+
+  const doc: UploadedDoc = {
+    id: 'doc-psico-1',
+    name: 'Resumen para el oral Psicodiagnóstico y Entrevista (1).pdf',
+    size: 45200,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: corruptedHeaderAndText,
+    status: 'ready',
+  };
+  doc.analysis = buildLocalDocAnalysis(doc);
+
+  const config: QuizConfig = {
+    selectedModalities: ['multiple_choice', 'true_false', 'fill_blank'],
+    difficulty: 'jacqueline',
+    questionCount: 6,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  };
+
+  const questions = generateFallbackQuestions([doc], config);
+  assert.equal(questions.length, 6);
+
+  for (const q of questions) {
+    assert.equal(q.sourceDocName, 'Resumen para el oral Psicodiagnóstico y Entrevista (1).pdf');
+    assert.ok(!q.prompt.includes('sicodiagnósticoAyAEntM'), `Corrupted token in prompt: ${q.prompt}`);
+    assert.ok(!q.prompt.includes('ageA'), `Corrupted token ageA in prompt: ${q.prompt}`);
+    assert.ok(!q.prompt.includes('AofA'), `Corrupted token AofA in prompt: ${q.prompt}`);
+    assert.ok(!q.prompt.includes('eNista'), `Corrupted token eNista in prompt: ${q.prompt}`);
+    assert.ok(!q.correctAnswer.includes('sicodiagnósticoAyAEntM'));
+    assert.ok(!q.correctAnswer.includes('ageA'));
+
+    if (q.options) {
+      for (const opt of q.options) {
+        assert.ok(!opt.includes('sicodiagnósticoAyAEntM'), `Corrupted option: ${opt}`);
+        assert.ok(!opt.includes('ageA'), `Corrupted option: ${opt}`);
+        assert.ok(!opt.includes('eNista'), `Corrupted option: ${opt}`);
+        assert.ok(!opt.includes('Ninguno de los conceptos citados'), `Meta fallback option should not be used: ${opt}`);
+      }
+    }
+  }
+});
+
+test('Modo Estudio Sin IA: Even if a PDF only had a corrupted header line, synthesizes clean academic questions', () => {
+  const onlyCorruptedHeader = `R :AP sicodiagnósticoAyAEntM eNista P ageA 1 AofA C5.`;
+
+  const doc: UploadedDoc = {
+    id: 'doc-psico-header-only',
+    name: 'Resumen para el oral Psicodiagnóstico y Entrevista (1).pdf',
+    size: 21000,
+    type: 'application/pdf',
+    extension: '.pdf',
+    category: 'pdf',
+    rawText: onlyCorruptedHeader,
+    status: 'ready',
+  };
+  doc.analysis = buildLocalDocAnalysis(doc);
+
+  const config: QuizConfig = {
+    selectedModalities: ['multiple_choice'],
+    difficulty: 'jacqueline',
+    questionCount: 4,
+    includeDocCrossAnalysis: true,
+    engineMode: 'no_ai',
+  };
+
+  const questions = generateFallbackQuestions([doc], config);
+  assert.equal(questions.length, 4);
+  for (const q of questions) {
+    assert.ok(!q.prompt.includes('sicodiagnósticoAyAEntM'), `Prompt must be clean: ${q.prompt}`);
+    assert.ok(!q.prompt.includes('ageA'), `Prompt must be clean: ${q.prompt}`);
+    assert.ok(!q.prompt.includes('AofA'), `Prompt must be clean: ${q.prompt}`);
+    assert.ok(q.prompt.includes('Psicodiagnóstico') || q.prompt.includes('Entrevista'));
+    assert.equal(q.options?.length, 4);
+  }
+});
+
