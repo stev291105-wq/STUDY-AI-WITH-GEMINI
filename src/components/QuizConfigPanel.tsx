@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Sliders,
   CheckSquare,
@@ -10,9 +10,14 @@ import {
   Sparkles,
   Zap,
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
+  BookOpen,
+  Key
 } from 'lucide-react';
-import { DifficultyLevel, QuestionModality, QuizConfig, UploadedDoc } from '../types';
+import { DifficultyLevel, QuestionModality, QuizConfig, UploadedDoc, VisitorGeminiState } from '../types';
 import { toggleModalitySelection } from '../utils/quizEngine';
 
 interface QuizConfigPanelProps {
@@ -22,17 +27,23 @@ interface QuizConfigPanelProps {
   onStartQuiz: () => void;
   isGenerating: boolean;
   onLoadPresets: () => void;
+  visitorState?: VisitorGeminiState;
+  onOpenVisitorModal?: () => void;
+  onOpenEngineModal?: () => void;
 }
 
-export const QuizConfigPanel: React.FC<QuizConfigPanelProps & { onOpenEngineModal?: () => void }> = ({
+export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
   config,
   setConfig,
   documents,
   onStartQuiz,
   isGenerating,
   onLoadPresets,
+  visitorState,
+  onOpenVisitorModal,
   onOpenEngineModal,
 }) => {
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
   const { selectedModalities, difficulty, questionCount, engineMode, customConfig } = config;
 
   // Modalities metadata
@@ -150,78 +161,162 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps & { onOpenEngineModa
           )}
         </div>
 
-        {/* 3 Forms of Use Selector Banner */}
-        <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-2">
+        {/* Mode Selector Banner: 3 Main Options + Más Opciones */}
+        <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-3">
           <div className="flex items-center justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
             <span>FORMA DE USO DEL GENERADOR:</span>
             <span className="text-[11px] font-medium text-slate-500">
-              {engineMode === 'no_ai'
-                ? '🟢 100% Autónomo sin API'
+              {engineMode === 'gemini_visitor'
+                ? '⭐ Gemini · Tu cuenta de Google'
+                : engineMode === 'no_ai'
+                ? '🟢 Modo Estudio Sin IA (Local)'
                 : engineMode === 'gemini_env'
-                ? '⚡ IA de Gemini Activa'
+                ? '⚡ IA del entorno del creador'
                 : `🔑 Proveedor ${customConfig?.provider?.toUpperCase() || 'Externo'}`}
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => setConfig(prev => ({ ...prev, engineMode: 'no_ai' }))}
-              className={`px-3 py-2.5 rounded-xl text-xs font-bold text-left transition-all border ${
-                engineMode === 'no_ai'
-                  ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-200 ring-2 ring-emerald-500/20'
-                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-white dark:hover:bg-slate-900'
-              }`}
-            >
-              <div className="flex items-center gap-1.5">
-                <span>📘</span>
-                <span>Modo Estudio Sin IA</span>
-              </div>
-              <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400 mt-0.5">
-                Demo local 100% autónomo
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setConfig(prev => ({ ...prev, engineMode: 'gemini_env' }))}
-              className={`px-3 py-2.5 rounded-xl text-xs font-bold text-left transition-all border ${
-                engineMode === 'gemini_env'
-                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 ring-2 ring-indigo-500/20'
-                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-white dark:hover:bg-slate-900'
-              }`}
-            >
-              <div className="flex items-center gap-1.5">
-                <span>⚡</span>
-                <span>Modo con IA (Gemini)</span>
-              </div>
-              <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400 mt-0.5">
-                API Key de este entorno
-              </div>
-            </button>
-
-            <button
-              type="button"
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+            {/* Option 1: Gemini con mi cuenta de Google (Recomendada) */}
+            <div
               onClick={() => {
-                setConfig(prev => ({ ...prev, engineMode: 'custom_keys' }));
-                if (onOpenEngineModal && !customConfig?.apiKey) {
-                  onOpenEngineModal();
+                setConfig(prev => ({ ...prev, engineMode: 'gemini_visitor' }));
+                if (!visitorState?.isConnected && onOpenVisitorModal) {
+                  onOpenVisitorModal();
                 }
               }}
-              className={`px-3 py-2.5 rounded-xl text-xs font-bold text-left transition-all border ${
-                engineMode === 'custom_keys'
-                  ? 'border-amber-500 bg-amber-50 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 ring-2 ring-amber-500/20'
-                  : 'border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-white dark:hover:bg-slate-900'
+              className={`relative p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
+                engineMode === 'gemini_visitor'
+                  ? 'border-indigo-500 bg-indigo-50/80 dark:bg-indigo-950/70 text-indigo-950 dark:text-indigo-100 ring-2 ring-indigo-500/20 shadow-xs'
+                  : 'border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900'
               }`}
             >
-              <div className="flex items-center gap-1.5">
-                <span>🔑</span>
-                <span>Claves Externas (BYOK)</span>
+              <div className="flex items-start justify-between gap-1.5">
+                <div className="flex items-center gap-1.5 font-bold text-xs text-indigo-600 dark:text-indigo-400">
+                  <Sparkles className="w-4 h-4 text-indigo-500" />
+                  <span>Gemini con mi cuenta de Google</span>
+                </div>
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 shrink-0">
+                  Recomendada
+                </span>
               </div>
-              <div className="text-[10px] font-normal text-slate-500 dark:text-slate-400 mt-0.5">
-                Grok, Llama, OpenAI, etc.
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
+                Tu cuota gratuita personal de AI Studio sin compartir límites con otros.
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-indigo-100 dark:border-indigo-900/50 flex items-center justify-between text-[10px]">
+                <span className="font-semibold text-indigo-600 dark:text-indigo-400">
+                  {visitorState?.isConnected ? '✓ Clave guardada' : 'Pulsa para conectar'}
+                </span>
+                {onOpenVisitorModal && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfig(prev => ({ ...prev, engineMode: 'gemini_visitor' }));
+                      onOpenVisitorModal();
+                    }}
+                    className="text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-300 underline font-medium"
+                  >
+                    {visitorState?.isConnected ? 'Gestionar key' : 'Conectar gratis'}
+                  </button>
+                )}
               </div>
+            </div>
+
+            {/* Option 2: Modo Estudio Sin IA */}
+            <div
+              onClick={() => setConfig(prev => ({ ...prev, engineMode: 'no_ai' }))}
+              className={`p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
+                engineMode === 'no_ai'
+                  ? 'border-emerald-500 bg-emerald-50/80 dark:bg-emerald-950/70 text-emerald-950 dark:text-emerald-100 ring-2 ring-emerald-500/20 shadow-xs'
+                  : 'border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900'
+              }`}
+            >
+              <div className="flex items-center gap-1.5 font-bold text-xs text-emerald-700 dark:text-emerald-400">
+                <BookOpen className="w-4 h-4 text-emerald-600" />
+                <span>Modo Estudio Sin IA</span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
+                100% local, autónomo y privado. No requiere conexión a IA ni API keys.
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-emerald-100 dark:border-emerald-900/50 flex items-center justify-between text-[10px]">
+                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                  {engineMode === 'no_ai' ? '✓ Activo' : 'Seleccionar'}
+                </span>
+                <span className="text-slate-400 font-normal">Sin cuota</span>
+              </div>
+            </div>
+
+            {/* Option 3: IA del entorno del creador */}
+            <div
+              onClick={() => setConfig(prev => ({ ...prev, engineMode: 'gemini_env' }))}
+              className={`p-3.5 rounded-xl text-left transition-all border cursor-pointer ${
+                engineMode === 'gemini_env'
+                  ? 'border-purple-500 bg-purple-50/80 dark:bg-purple-950/70 text-purple-950 dark:text-purple-100 ring-2 ring-purple-500/20 shadow-xs'
+                  : 'border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900'
+              }`}
+            >
+              <div className="flex items-center gap-1.5 font-bold text-xs text-purple-700 dark:text-purple-400">
+                <Cpu className="w-4 h-4 text-purple-600" />
+                <span>IA del entorno del creador</span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
+                Utiliza la cuota y clave de Gemini precargada en el entorno del proyecto.
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-purple-100 dark:border-purple-900/50 flex items-center justify-between text-[10px]">
+                <span className="font-semibold text-purple-700 dark:text-purple-400">
+                  {engineMode === 'gemini_env' ? '✓ Activo' : 'Seleccionar'}
+                </span>
+                <span className="text-slate-400 font-normal">Servidor</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Más Opciones Button & Collapsible */}
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowMoreOptions(prev => !prev)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+            >
+              <span>{showMoreOptions ? 'Ocultar opciones adicionales' : 'Más opciones de conexión'}</span>
+              {showMoreOptions ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
+
+            {showMoreOptions && (
+              <div className="mt-2.5 p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                    <Key className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h5 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Claves de otros proveedores (BYOK)
+                    </h5>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Configura claves API de Grok (xAI), Llama (Groq), OpenAI (ChatGPT) u otro endpoint.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfig(prev => ({ ...prev, engineMode: 'custom_keys' }));
+                      if (onOpenEngineModal) onOpenEngineModal();
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      engineMode === 'custom_keys'
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    {customConfig?.apiKey ? `Configurar (${customConfig.provider.toUpperCase()})` : 'Ingresar clave BYOK'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -2,9 +2,16 @@ export type QuestionModality = 'multiple_choice' | 'true_false' | 'fill_blank' |
 
 export type DifficultyLevel = 'facil' | 'medio' | 'dificil' | 'jacqueline';
 
-export type EngineMode = 'no_ai' | 'gemini_env' | 'custom_keys';
+export type EngineMode = 'gemini_visitor' | 'no_ai' | 'gemini_env' | 'custom_keys';
 
 export type CustomProviderType = 'grok' | 'llama' | 'openai' | 'gemini';
+
+export interface VisitorGeminiState {
+  apiKey: string;
+  remember: boolean;
+  model: string;
+  isConnected: boolean;
+}
 
 export interface CustomAIConfig {
   provider: CustomProviderType;

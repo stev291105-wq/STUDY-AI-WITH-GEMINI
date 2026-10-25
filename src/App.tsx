@@ -11,6 +11,7 @@ import { QuizRunner } from './components/QuizRunner';
 import { QuizResults } from './components/QuizResults';
 import { StudyVisualAidModal } from './components/StudyVisualAidModal';
 import { EngineModeModal } from './components/EngineModeModal';
+import { VisitorGeminiModal } from './components/VisitorGeminiModal';
 import {
   UploadedDoc,
   QuizConfig,
@@ -18,9 +19,16 @@ import {
   UserAnswer,
   QuizSummary,
   EngineMode,
-  CustomAIConfig
+  CustomAIConfig,
+  VisitorGeminiState
 } from './types';
 import { PRESET_SAMPLE_DOCUMENTS, generateFallbackQuestions, calculateQuizSummary } from './utils/quizEngine';
+import {
+  getSavedVisitorKey,
+  analyzeVisitorDocWithGemini,
+  generateVisitorQuestionsWithGemini
+} from './services/geminiClient';
+import { AlertCircle, BookOpen, X } from 'lucide-react';
 
 const SHARED_APP_URL = 'https://ais-pre-oxfgvh62n37n2ogxmc7uos-221001034983.us-west1.run.app';
 
@@ -47,6 +55,17 @@ export default function App() {
   // Documents: Seed with rich presets so the user can test all modalities immediately!
   const [documents, setDocuments] = useState<UploadedDoc[]>(PRESET_SAMPLE_DOCUMENTS);
 
+  // Visitor Gemini Account State (Client-Side Only, never sent to server)
+  const [visitorState, setVisitorState] = useState<VisitorGeminiState>(() => {
+    const saved = getSavedVisitorKey();
+    return {
+      apiKey: saved.apiKey,
+      remember: saved.remember,
+      model: saved.apiKey ? 'gemini-2.5-flash' : '',
+      isConnected: Boolean(saved.apiKey),
+    };
+  });
+
   // Custom AI credentials stored in localStorage
   const [customAIConfig, setCustomAIConfig] = useState<CustomAIConfig | undefined>(() => {
     if (typeof window !== 'undefined') {
@@ -58,14 +77,17 @@ export default function App() {
     return undefined;
   });
 
-  // Quiz Configuration
-  const [config, setConfig] = useState<QuizConfig>({
-    selectedModalities: ['multiple_choice', 'true_false'],
-    difficulty: 'medio',
-    questionCount: 5,
-    includeDocCrossAnalysis: true,
-    engineMode: 'no_ai', // Default to Modo Estudio Sin IA as requested for rapid local access!
-    customConfig: customAIConfig,
+  // Quiz Configuration: Recommended default is "gemini_visitor" (Gemini con mi cuenta de Google)
+  const [config, setConfig] = useState<QuizConfig>(() => {
+    const saved = getSavedVisitorKey();
+    return {
+      selectedModalities: ['multiple_choice', 'true_false'],
+      difficulty: 'medio',
+      questionCount: 5,
+      includeDocCrossAnalysis: true,
+      engineMode: saved.apiKey ? 'gemini_visitor' : 'gemini_visitor',
+      customConfig: undefined,
+    };
   });
 
   // Keep config in sync with customAIConfig
@@ -93,6 +115,8 @@ export default function App() {
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isVisualAidOpen, setIsVisualAidOpen] = useState<boolean>(false);
   const [isEngineModalOpen, setIsEngineModalOpen] = useState<boolean>(false);
+  const [isVisitorModalOpen, setIsVisitorModalOpen] = useState<boolean>(false);
+  const [appQuotaMessage, setAppQuotaMessage] = useState<string>('');
 
   // Check ?autostart=1 on mount to allow instant testability
   useEffect(() => {
@@ -115,9 +139,46 @@ export default function App() {
     }
   }, []);
 
-  // Analyze single document with backend API
+  // Analyze single document (supports visitor client-side Gemini, server env, or no_ai)
   const handleAnalyzeDoc = async (doc: UploadedDoc) => {
     setIsAnalyzing(true);
+    setAppQuotaMessage('');
+
+    // If Visitor Gemini mode is active and key is present, execute directly in browser!
+    if (config.engineMode === 'gemini_visitor') {
+      if (!visitorState.isConnected || !visitorState.apiKey) {
+        setIsVisitorModalOpen(true);
+        setIsAnalyzing(false);
+        return;
+      }
+
+      try {
+        const analysisResult = await analyzeVisitorDocWithGemini(doc, visitorState.apiKey);
+        setDocuments(prev =>
+          prev.map(d =>
+            d.id === doc.id
+              ? {
+                  ...d,
+                  status: 'ready',
+                  analysis: analysisResult,
+                }
+              : d
+          )
+        );
+      } catch (err: any) {
+        if (err.message?.includes('Alcanzaste el límite gratuito')) {
+          setAppQuotaMessage('Alcanzaste el límite gratuito de tu cuenta de Gemini; espera un minuto o usa el Modo Estudio Sin IA.');
+        }
+        setDocuments(prev =>
+          prev.map(d => (d.id === doc.id ? { ...d, status: 'ready' } : d))
+        );
+      } finally {
+        setIsAnalyzing(false);
+      }
+      return;
+    }
+
+    // Server-side or external API analysis
     try {
       const res = await fetch('/api/analyze-multimodal', {
         method: 'POST',
@@ -145,7 +206,6 @@ export default function App() {
       }
     } catch (err) {
       console.warn('Doc analysis warning:', err);
-      // Fallback ready
       setDocuments(prev =>
         prev.map(d => (d.id === doc.id ? { ...d, status: 'ready' } : d))
       );
@@ -156,15 +216,49 @@ export default function App() {
 
   // Start Quiz generator
   const handleStartQuiz = async () => {
+    const activeDocs = documents.length > 0 ? documents : PRESET_SAMPLE_DOCUMENTS;
     if (documents.length === 0) {
       setDocuments(PRESET_SAMPLE_DOCUMENTS);
     }
 
+    setAppQuotaMessage('');
+
+    // Case 1: Visitor Gemini Mode
+    if (config.engineMode === 'gemini_visitor') {
+      if (!visitorState.isConnected || !visitorState.apiKey) {
+        // Guide user to connect their free Google Gemini key
+        setIsVisitorModalOpen(true);
+        return;
+      }
+
+      setIsGenerating(true);
+      try {
+        const generated = await generateVisitorQuestionsWithGemini(activeDocs, config, visitorState.apiKey);
+        setQuestions(generated);
+        setCurrentIndex(0);
+        setAnswers({});
+        setQuizStartTime(Date.now());
+        setAppState('playing');
+      } catch (err: any) {
+        if (err.message?.includes('Alcanzaste el límite gratuito') || err.message?.includes('429')) {
+          setAppQuotaMessage('Alcanzaste el límite gratuito de tu cuenta de Gemini; espera un minuto o usa el Modo Estudio Sin IA.');
+        }
+        // Fallback generator so the user is never stuck
+        const fallback = generateFallbackQuestions(activeDocs, config);
+        setQuestions(fallback);
+        setCurrentIndex(0);
+        setAnswers({});
+        setQuizStartTime(Date.now());
+        setAppState('playing');
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
+    // Case 2: Server-side Gemini or Custom Keys or No AI
     setIsGenerating(true);
-
     try {
-      const activeDocs = documents.length > 0 ? documents : PRESET_SAMPLE_DOCUMENTS;
-
       const res = await fetch('/api/generate-questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -179,22 +273,17 @@ export default function App() {
       if (data.success && Array.isArray(data.questions) && data.questions.length > 0) {
         setQuestions(data.questions);
       } else {
-        // Fallback generator
         const fallback = generateFallbackQuestions(activeDocs, config);
         setQuestions(fallback);
       }
 
-      // Reset runner state
       setCurrentIndex(0);
       setAnswers({});
       setQuizStartTime(Date.now());
       setAppState('playing');
     } catch (err) {
       console.warn('Questions generation fallback:', err);
-      const fallback = generateFallbackQuestions(
-        documents.length > 0 ? documents : PRESET_SAMPLE_DOCUMENTS,
-        config
-      );
+      const fallback = generateFallbackQuestions(activeDocs, config);
       setQuestions(fallback);
       setCurrentIndex(0);
       setAnswers({});
@@ -239,11 +328,55 @@ export default function App() {
         docCount={documents.length}
         engineMode={config.engineMode}
         customConfig={config.customConfig}
+        visitorState={visitorState}
+        onOpenVisitorModal={() => setIsVisitorModalOpen(true)}
         onOpenEngineModal={() => setIsEngineModalOpen(true)}
+        onSelectMode={(mode: EngineMode) => setConfig(prev => ({ ...prev, engineMode: mode }))}
         onOpenVisualAid={() => setIsVisualAidOpen(true)}
         onResetSession={handleGoToSetup}
         sharedUrl={SHARED_APP_URL}
       />
+
+      {/* Global Quota Alert Banner if 429 triggered */}
+      {appQuotaMessage && (
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-4">
+          <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/70 border border-amber-300 dark:border-amber-700 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs sm:text-sm font-bold">
+                  {appQuotaMessage}
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                  Puedes continuar practicando de forma ilimitada y sin esperas activando el Modo Estudio Sin IA.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfig(prev => ({ ...prev, engineMode: 'no_ai' }));
+                  setAppQuotaMessage('');
+                }}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5 transition-colors shadow-xs"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Usar Modo Estudio Sin IA</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setAppQuotaMessage('')}
+                className="p-1.5 text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-white"
+                title="Cerrar aviso"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
         {appState === 'setup' && (
@@ -290,6 +423,8 @@ export default function App() {
               onStartQuiz={handleStartQuiz}
               isGenerating={isGenerating}
               onLoadPresets={() => setDocuments(PRESET_SAMPLE_DOCUMENTS)}
+              visitorState={visitorState}
+              onOpenVisitorModal={() => setIsVisitorModalOpen(true)}
               onOpenEngineModal={() => setIsEngineModalOpen(true)}
             />
           </div>
@@ -307,6 +442,7 @@ export default function App() {
             difficulty={config.difficulty}
             engineMode={config.engineMode}
             customConfig={config.customConfig}
+            visitorState={visitorState}
           />
         )}
 
@@ -335,8 +471,25 @@ export default function App() {
         onSelectMode={(mode: EngineMode) => setConfig(prev => ({ ...prev, engineMode: mode }))}
         customConfig={customAIConfig}
         onSaveCustomConfig={handleSaveCustomConfig}
+        visitorState={visitorState}
+        onOpenVisitorModal={() => setIsVisitorModalOpen(true)}
         sharedUrl={SHARED_APP_URL}
       />
+
+      {/* Guided 3-Step Modal for Gemini con mi cuenta de Google */}
+      {isVisitorModalOpen && (
+        <VisitorGeminiModal
+          isOpen={isVisitorModalOpen}
+          onClose={() => setIsVisitorModalOpen(false)}
+          visitorState={visitorState}
+          onUpdateVisitorState={(newState) => {
+            setVisitorState(newState);
+            if (newState.isConnected) {
+              setConfig(prev => ({ ...prev, engineMode: 'gemini_visitor' }));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

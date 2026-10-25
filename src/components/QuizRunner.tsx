@@ -16,8 +16,9 @@ import {
   FileText,
   PenTool
 } from 'lucide-react';
-import { Question, UserAnswer, DifficultyLevel, EngineMode, CustomAIConfig } from '../types';
+import { Question, UserAnswer, DifficultyLevel, EngineMode, CustomAIConfig, VisitorGeminiState } from '../types';
 import { evaluateMechanicA, assessSemanticSimilarity, normalizeText } from '../utils/quizEngine';
+import { evaluateVisitorOpenAnswerWithGemini } from '../services/geminiClient';
 
 interface QuizRunnerProps {
   questions: Question[];
@@ -30,6 +31,7 @@ interface QuizRunnerProps {
   difficulty: DifficultyLevel;
   engineMode?: EngineMode;
   customConfig?: CustomAIConfig;
+  visitorState?: VisitorGeminiState;
 }
 
 export const QuizRunner: React.FC<QuizRunnerProps> = ({
@@ -43,6 +45,7 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
   difficulty,
   engineMode,
   customConfig,
+  visitorState,
 }) => {
   const currentQuestion = questions[currentIndex];
   const totalQuestions = questions.length;
@@ -52,6 +55,9 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
   const [typedAnswer, setTypedAnswer] = useState<string>('');
   const [hasSubmittedMechanicB, setHasSubmittedMechanicB] = useState<boolean>(false);
   const [timeElapsed, setTimeElapsed] = useState<number>(0);
+  const [isAiEvaluating, setIsAiEvaluating] = useState<boolean>(false);
+  const [aiFeedback, setAiFeedback] = useState<string>('');
+  const [quotaError, setQuotaError] = useState<string>('');
 
   // Timer
   useEffect(() => {
@@ -64,6 +70,8 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
   // Sync state when currentIndex changes
   useEffect(() => {
     const existing = answers[currentQuestion?.id];
+    setAiFeedback('');
+    setQuotaError('');
     if (existing) {
       setSelectedOption(existing.selectedOption || '');
       setTypedAnswer(existing.userText || '');
@@ -106,6 +114,44 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
     setAnswers(prev => ({ ...prev, [currentQuestion.id]: newAnswer }));
   };
 
+  // Helper to validate with visitor Gemini
+  const handleAiValidate = async (text: string) => {
+    if (engineMode !== 'gemini_visitor' || !visitorState?.apiKey) return;
+    setIsAiEvaluating(true);
+    setQuotaError('');
+    try {
+      const result = await evaluateVisitorOpenAnswerWithGemini(
+        currentQuestion.prompt,
+        currentQuestion.officialAnswer || currentQuestion.correctAnswer,
+        text,
+        visitorState.apiKey
+      );
+      setAiFeedback(result.feedback);
+      // Auto-update answer correctness if not already manually self-evaluated
+      setAnswers(prev => {
+        const curr = prev[currentQuestion.id];
+        if (curr && !curr.selfEvaluated) {
+          return {
+            ...prev,
+            [currentQuestion.id]: {
+              ...curr,
+              isCorrect: result.isCorrect,
+            },
+          };
+        }
+        return prev;
+      });
+    } catch (err: any) {
+      if (err.message?.includes('Alcanzaste el límite gratuito')) {
+        setQuotaError(err.message);
+      } else {
+        setQuotaError(`Error al evaluar con Gemini: ${err.message?.slice(0, 90) || 'Error desconocido'}`);
+      }
+    } finally {
+      setIsAiEvaluating(false);
+    }
+  };
+
   // Mechanic B Submit Handler
   const handleSubmitMechanicB = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -126,6 +172,11 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
     };
 
     setAnswers(prev => ({ ...prev, [currentQuestion.id]: tentativeAnswer }));
+
+    // If Gemini visitor key is active, evaluate open question with AI!
+    if (engineMode === 'gemini_visitor' && visitorState?.apiKey) {
+      handleAiValidate(typedAnswer);
+    }
   };
 
   // Mechanic B Self Evaluation Handler ("Respondí bien" / "Me equivoqué")
@@ -419,6 +470,36 @@ export const QuizRunner: React.FC<QuizRunnerProps> = ({
                 <div className="text-sm text-slate-800 dark:text-slate-200 leading-relaxed font-medium whitespace-pre-wrap bg-white dark:bg-slate-900 p-4 rounded-xl border border-indigo-100 dark:border-indigo-900/40">
                   {currentQuestion.officialAnswer || currentQuestion.correctAnswer}
                 </div>
+
+                {/* Quota error banner if 429 occurs */}
+                {quotaError && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+                    <span className="text-base shrink-0">⚠️</span>
+                    <div>
+                      <div className="font-bold">Aviso de cuota Gemini</div>
+                      <p>{quotaError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* AI evaluating loader */}
+                {isAiEvaluating && (
+                  <div className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 font-semibold p-2">
+                    <Sparkles className="w-3.5 h-3.5 animate-spin" />
+                    <span>Gemini (con tu cuenta de Google) está evaluando la precisión de tu respuesta...</span>
+                  </div>
+                )}
+
+                {/* AI feedback display */}
+                {aiFeedback && (
+                  <div className="p-3.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-xs space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-indigo-900 dark:text-indigo-300">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Evaluación pedagógica de Gemini (tu cuenta):</span>
+                    </div>
+                    <p className="text-slate-700 dark:text-slate-300 leading-relaxed">{aiFeedback}</p>
+                  </div>
+                )}
 
                 {/* Self-evaluation prompt and buttons */}
                 <div className="pt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-white dark:bg-slate-900/80 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800">

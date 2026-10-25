@@ -14,7 +14,7 @@ import {
   ExternalLink,
   Lock
 } from 'lucide-react';
-import { EngineMode, CustomProviderType, CustomAIConfig } from '../types';
+import { EngineMode, CustomProviderType, CustomAIConfig, VisitorGeminiState } from '../types';
 
 interface EngineModeModalProps {
   isOpen: boolean;
@@ -23,6 +23,8 @@ interface EngineModeModalProps {
   onSelectMode: (mode: EngineMode) => void;
   customConfig?: CustomAIConfig;
   onSaveCustomConfig: (config: CustomAIConfig) => void;
+  visitorState?: VisitorGeminiState;
+  onOpenVisitorModal?: () => void;
   sharedUrl: string;
 }
 
@@ -33,6 +35,8 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
   onSelectMode,
   customConfig,
   onSaveCustomConfig,
+  visitorState,
+  onOpenVisitorModal,
   sharedUrl,
 }) => {
   const [activeTab, setActiveTab] = useState<EngineMode>(currentMode);
@@ -144,9 +148,39 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
           </button>
         </div>
 
-        {/* 3 Main Modes Selector */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {/* Mode 1: Modo Estudio Sin IA */}
+        {/* 4 Modes Selector Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Mode 1: Gemini con mi cuenta de Google (Recomendada) */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('gemini_visitor')}
+            className={`p-4 rounded-2xl border text-left flex flex-col justify-between transition-all ${
+              activeTab === 'gemini_visitor'
+                ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/80 dark:bg-indigo-950/50 text-indigo-950 dark:text-indigo-100'
+                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                  Recomendada
+                </span>
+              </div>
+              <h4 className="text-xs font-bold leading-tight">Gemini con mi cuenta de Google</h4>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
+                Usa tu propia clave gratuita de Google AI Studio sin límites compartidos.
+              </p>
+            </div>
+            <div className="mt-3 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+              {activeTab === 'gemini_visitor' && <Check className="w-3.5 h-3.5" />}
+              <span>{activeTab === 'gemini_visitor' ? 'Seleccionado' : 'Elegir'}</span>
+            </div>
+          </button>
+
+          {/* Mode 2: Modo Estudio Sin IA */}
           <button
             type="button"
             onClick={() => setActiveTab('no_ai')}
@@ -157,10 +191,10 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
             }`}
           >
             <div>
-              <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center mb-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-300 flex items-center justify-center mb-2">
                 <BookOpen className="w-4 h-4" />
               </div>
-              <h4 className="text-xs font-bold leading-tight">1. Modo Estudio Sin IA</h4>
+              <h4 className="text-xs font-bold leading-tight">Modo Estudio Sin IA</h4>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
                 100% local y offline. Sin llamadas a servidores externos ni necesidad de claves.
               </p>
@@ -171,32 +205,32 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
             </div>
           </button>
 
-          {/* Mode 2: Modo con IA (Gemini Entorno) */}
+          {/* Mode 3: IA del entorno del creador */}
           <button
             type="button"
             onClick={() => setActiveTab('gemini_env')}
             className={`p-4 rounded-2xl border text-left flex flex-col justify-between transition-all ${
               activeTab === 'gemini_env'
-                ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-950 dark:text-indigo-100'
+                ? 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/60 dark:bg-purple-950/40 text-purple-950 dark:text-purple-100'
                 : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300'
             }`}
           >
             <div>
-              <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 flex items-center justify-center mb-2.5">
-                <Sparkles className="w-4 h-4" />
+              <div className="w-8 h-8 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center mb-2">
+                <Cpu className="w-4 h-4" />
               </div>
-              <h4 className="text-xs font-bold leading-tight">2. Modo con IA (Gemini)</h4>
+              <h4 className="text-xs font-bold leading-tight">IA del entorno del creador</h4>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
-                Usa la API Key de Gemini del entorno con Thinking Mode en Jacqueline.
+                Usa la API Key de Gemini del creador inyectada en el servidor.
               </p>
             </div>
-            <div className="mt-3 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+            <div className="mt-3 text-[10px] font-bold text-purple-600 dark:text-purple-400 flex items-center gap-1">
               {activeTab === 'gemini_env' && <Check className="w-3.5 h-3.5" />}
               <span>{activeTab === 'gemini_env' ? 'Seleccionado' : 'Elegir'}</span>
             </div>
           </button>
 
-          {/* Mode 3: Claves Externas (BYOK) */}
+          {/* Mode 4: Claves Propias (BYOK) */}
           <button
             type="button"
             onClick={() => setActiveTab('custom_keys')}
@@ -207,12 +241,12 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
             }`}
           >
             <div>
-              <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-300 flex items-center justify-center mb-2.5">
+              <div className="w-8 h-8 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-600 dark:text-amber-300 flex items-center justify-center mb-2">
                 <Key className="w-4 h-4" />
               </div>
-              <h4 className="text-xs font-bold leading-tight">3. Claves Propias (BYOK)</h4>
+              <h4 className="text-xs font-bold leading-tight">Más opciones: Claves BYOK</h4>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-snug">
-                Agrega API keys de Grok, Llama (Groq), OpenAI o Gemini propio.
+                Agrega API keys de Grok, Llama (Groq), OpenAI u otros endpoints.
               </p>
             </div>
             <div className="mt-3 text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
@@ -223,6 +257,36 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
         </div>
 
         {/* Tab Detail Contents */}
+        {activeTab === 'gemini_visitor' && (
+          <div className="p-4 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/60 space-y-3 text-xs text-indigo-950 dark:text-indigo-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-bold text-sm text-indigo-800 dark:text-indigo-300">
+                <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Gemini con mi cuenta de Google (Recomendada)</span>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                {visitorState?.isConnected ? '✓ Clave vinculada' : 'Pendiente de vincular'}
+              </span>
+            </div>
+            <p className="leading-relaxed text-slate-600 dark:text-slate-300">
+              Cada visitante usa su propia cuota gratuita de Google AI Studio. Las peticiones van directamente desde tu navegador a la API de Google sin pasar por ningún servidor intermedio.
+            </p>
+            {onOpenVisitorModal && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenVisitorModal();
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{visitorState?.isConnected ? 'Cambiar o verificar mi API Key' : 'Abrir guía de 3 pasos para conectar'}</span>
+              </button>
+            )}
+          </div>
+        )}
+
         {activeTab === 'no_ai' && (
           <div className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 space-y-2 text-xs text-emerald-900 dark:text-emerald-200">
             <div className="flex items-center gap-2 font-bold text-sm text-emerald-800 dark:text-emerald-300">
@@ -237,13 +301,13 @@ export const EngineModeModal: React.FC<EngineModeModalProps> = ({
         )}
 
         {activeTab === 'gemini_env' && (
-          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/60 space-y-2 text-xs text-indigo-900 dark:text-indigo-200">
-            <div className="flex items-center gap-2 font-bold text-sm text-indigo-800 dark:text-indigo-300">
-              <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Modo con IA (Gemini del Entorno)</span>
+          <div className="p-4 rounded-2xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/60 space-y-2 text-xs text-purple-900 dark:text-purple-200">
+            <div className="flex items-center gap-2 font-bold text-sm text-purple-800 dark:text-purple-300">
+              <Cpu className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+              <span>IA del entorno del creador</span>
             </div>
             <p className="leading-relaxed">
-              Aprovecha la inteligencia de Google AI Studio inyectada en el servidor. Incluye reconocimiento de visión OCR y HTR (caligrafía manuscrita) y el potente modelo de razonamiento profundo <strong>gemini-4-argon</strong> con pensamiento de alta intensidad para el <strong>Nivel Jacqueline</strong>.
+              Aprovecha la inteligencia de Google AI Studio inyectada en el servidor. Incluye reconocimiento de visión OCR y HTR (caligrafía manuscrita) y el modelo de razonamiento para el <strong>Nivel Jacqueline</strong>.
             </p>
           </div>
         )}
